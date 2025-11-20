@@ -125,4 +125,4 @@ class BleGatt(BaseBle):
     def recvall(self, size: int) -> bytes:
         return super().recvall(size)
 
-print(BleGatt("34:B7:DA:DB:F6:82", "UUDD").discover())
+print(BleGatt().discover())
