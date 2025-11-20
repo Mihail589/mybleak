@@ -22,7 +22,7 @@ class BleGatt(BaseBle):
                 print(path)
                 if dev and dev.get("Address") == address:
                     self.device_path = path
-                    
+                    print(path)
                     break
 
             if not self.device_path:
