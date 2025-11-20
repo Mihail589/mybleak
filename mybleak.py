@@ -26,6 +26,11 @@ class BleGatt(BaseBle):
         self.adapter = dbus.Interface(
         self.bus.get_object("org.bluez", self.adapter_path),
     self._adapter_iface
+    
+)
+        self.adapter_prob = dbus.Interface(
+    self.bus.get_object("org.bluez", self.adapter_path),
+    "org.freedesktop.DBus.Properties"
 )
     
     def set_self_name(self, adapter_name: str) -> bool:
@@ -85,7 +90,7 @@ class BleGatt(BaseBle):
         
         
 
-        powered = self.adapter.Get("org.bluez.Adapter1", "Powered")
+        powered = self.adapter_prob.Get("org.bluez.Adapter1", "Powered")
         return powered
     def name(self) -> Optional[str]:
         return super().name
@@ -102,7 +107,7 @@ class BleGatt(BaseBle):
     def set_bluetooth_power(self, state: bool) -> bool:
         self.adapter.Set("org.bluez.Adapter1", "Powered", state)
 
-        powered = self.adapter.Get("org.bluez.Adapter1", "Powered")
+        powered = self.adapter_prob.Get("org.bluez.Adapter1", "Powered")
         if not powered or powered:
             return True
         else:
