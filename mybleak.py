@@ -82,8 +82,14 @@ class BleGatt(BaseBle):
     def receive(self) -> bytes:
         return super().receive()
 
-    def set_bluetooth_power(self):
-        pass
+    def set_bluetooth_power(self, state: bool) -> bool:
+        self.adapter.Set("org.bluez.Adapter1", "Powered", state)
+
+        powered = self.adapter.Get("org.bluez.Adapter1", "Powered")
+        if not powered or powered:
+            return True
+        else:
+            return False
 
     def set_event(self, event: Event):
         return super().set_event(event)
