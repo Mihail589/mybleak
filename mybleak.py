@@ -65,7 +65,7 @@ class BleGatt(BaseBle):
                     if addr and data not in devicelist:
                         devicelist.append(data)
             time.sleep(0.01)
-        self.adapter.StartDiscovery()
+        self.adapter.StopDiscovery()
         return devicelist
 
     def fileno(self) -> int:
