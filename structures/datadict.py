@@ -1,0 +1,2 @@
+class DataDict:
+    pass

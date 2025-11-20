@@ -1,0 +1,91 @@
+from base_ble import *
+import dbus, dbus.mainloop.glib
+from gi.repository import GLib
+class BleGatt(BaseBle):
+    def __init__(self, address: Optional[str] = None, uuids: Optional[DeviceUuids] = None, is_server: bool = False, server_search_time: float | None = None):
+        super().__init__(address, uuids, is_server, server_search_time)
+        POLL_INTERVAL = 0.5  # как часто опрашивать D-Bus
+
+        self._busname = "org.bluez"
+        self._obj_manager_iface = "org.freedesktop.DBus.ObjectManager"
+        self._adapter_iface = "org.bluez.Adapter1"
+        self._device_iface = "org.bluez.Device1"
+        self.bus = dbus.SystemBus()
+        self.manager = dbus.Interface(self.bus.get_object(self._busname, "/"), self._obj_manager_iface)
+        print(address, uuids)
+    
+    def set_self_name(self, adapter_name: str) -> bool:
+        return super().set_self_name(adapter_name)
+    
+    def advertise(self, timeout: Optional[float] = None) -> bool:
+        return super().advertise(timeout)
+    
+    def connect(self, device: Any) -> bool:
+        return super().connect(device)
+    
+    def connected(self) -> bool:
+        return super().connected
+    
+    def discovered_uuids(self) -> DeviceUuids | None:
+        return super().discovered_uuids
+    
+    def discover(self, scan_duration: float = 10.) -> Set[Any]:
+        self.is_bluetooth_on()
+        
+    
+    def fileno(self) -> int:
+        return super().fileno()
+    
+    def get_event(self) -> Event:
+        return super().get_event()
+    
+    def get_self_name(self) -> str:
+        return super().get_self_name()
+    
+    def inWaiting(self) -> int:
+        return super().inWaiting()
+    
+    def in_waiting(self) -> int:
+        return super().in_waiting
+    
+    def is_advertising(self) -> bool:
+        return super().is_advertising
+    
+    def is_bluetooth_on(self):
+        adapter_path = None
+        for path, ifaces in self.manager.GetManagedObjects().items():
+            if self._adapter_iface in ifaces:
+                adapter_path = path
+                break
+
+        if not adapter_path:
+            print(path)
+
+    def name(self) -> Optional[str]:
+        return super().name
+    
+    def read(self, size: int = 1) -> bytes:
+        return super().read(size)
+
+    def read_packet(self) -> bytes:
+        return super().read_packet()
+
+    def receive(self) -> bytes:
+        return super().receive()
+
+    def set_bluetooth_power(self):
+        pass
+
+    def set_event(self, event: Event):
+        return super().set_event(event)
+
+    def set_timeout(self, timeout: Optional[float] = None):
+        return super().set_timeout(timeout)
+    
+    def write(self, data: bytes) -> bool:
+        return super().write(data)
+
+    def recvall(self, size: int) -> bytes:
+        return super().recvall(size)
+
+BleGatt("34:B7:DA:DB:F6:82", "UUDD").discover()
