@@ -12,6 +12,23 @@ class BleGatt(BaseBle):
         self._obj_manager_iface = "org.freedesktop.DBus.ObjectManager"
         self._adapter_iface = "org.bluez.Adapter1"
         self._device_iface = "org.bluez.Device1"
+        self._dbussetting()
+        self.address = address
+        self.uuids = uuids
+        if address:
+            self.device_path = None
+            for path, ifaces in self.manager.GetManagedObjects().items():
+                dev = ifaces.get("org.bluez.Device1")
+                if dev and dev.get("Address") == address:
+                    self.device_path = path
+                    break
+
+            if not self.device_path:
+                raise Exception("Устройство не найдено")
+            self.device = dbus.Interface(self.bus.get_object("org.bluez", self.device_path), "org.bluez.Device1")
+
+
+    def _dbussetting(self):
         self.bus = dbus.SystemBus()
         self.manager = dbus.Interface(self.bus.get_object(self._busname, "/"), self._obj_manager_iface)
         self.adapter_path = None
@@ -120,7 +137,25 @@ class BleGatt(BaseBle):
         return super().set_timeout(timeout)
     
     def write(self, data: bytes) -> bool:
-        return super().write(data)
+        self.device.Connect()
+        char_path = None
+        for path, ifaces in self.manager.GetManagedObjects().items():
+            svc = ifaces.get("org.bluez.GattService1")
+            char = ifaces.get("org.bluez.GattCharacteristic1")
+            if svc and char and path.startswith(self.device_path):
+                if svc.get("UUID") == self.uuids.service and char.get("UUID") == self.uuids.write:
+                    char_path = path
+                    break
+
+        if not char_path:
+            raise Exception("Характеристика в сервисе не найдена")
+
+        characteristic = dbus.Interface(self.bus.get_object("org.bluez", char_path),
+                                "org.bluez.GattCharacteristic1")
+
+        data = [dbus.Byte(b) for b in data]
+        characteristic.WriteValue(data, {})
+        self.device.Disconect()
 
     def recvall(self, size: int) -> bytes:
         return super().recvall(size)
