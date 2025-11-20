@@ -46,10 +46,20 @@ class BleGatt(BaseBle):
     def discover(self, scan_duration: float = 10.) -> Set[Any]:
         if not self.is_bluetooth_on():
             raise BluetoothError("Bluetooth is off")
-        devicelist = set()
-        #self.adapter.StartDiscovery()
-        print(devicelist)
-        
+        devicelist = []
+        self.adapter.StartDiscovery()
+        start = time.time()
+        while time.time() - start < scan_duration:
+            objects = self.manager.GetManagedObjects()
+            for path, ifaces in objects.items():
+                if self._device_iface in ifaces:
+                    props = ifaces[self._device_iface]
+                    addr = props.get("Address")
+                    name = props.get("Name") or props.get("Alias")
+                    data = {"addr": addr, "name": name}
+                    if addr and data not in devicelist:
+                        devicelist.append(data)
+            time.sleep(0.01)
     
     def fileno(self) -> int:
         return super().fileno()
