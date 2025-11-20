@@ -23,6 +23,11 @@ class BleGatt(BaseBle):
 
         if not self.adapter_path:
             raise BluetoothError("Отсутствуе блютуз адаптер")
+        
+        self.adapter = dbus.Interface(
+        self.bus.get_object("org.bluez", self.adapter_path),
+    "org.freedesktop.DBus.Properties"
+)
     
     def set_self_name(self, adapter_name: str) -> bool:
         return super().set_self_name(adapter_name)
@@ -63,12 +68,9 @@ class BleGatt(BaseBle):
     
     def is_bluetooth_on(self):
         
-        adapter_props = dbus.Interface(
-        self.bus.get_object("org.bluez", self.adapter_path),
-    "org.freedesktop.DBus.Properties"
-)
+        
 
-        powered = adapter_props.Get("org.bluez.Adapter1", "Powered")
+        powered = self.adapter.Get("org.bluez.Adapter1", "Powered")
         return powered
     def name(self) -> Optional[str]:
         return super().name
