@@ -139,51 +139,56 @@ class BleGatt(BaseBle):
     
     
     def write(self, data: bytes) -> bool:
-        mgr = dbus.Interface(self.bus.get_object("org.bluez", "/"),
-                     "org.freedesktop.DBus.ObjectManager")
+        mgr = dbus.Interface(
+        self.bus.get_object("org.bluez", "/"),
+        "org.freedesktop.DBus.ObjectManager"
+    )
 
-    # подключение
         self.device.Connect()
 
-    # дождаться ServicesResolved
-        dev_props = dbus.Interface(self.bus.get_object("org.bluez", self.device_path),
-                               "org.freedesktop.DBus.Properties")
+        service_uuid = self.uuids.service.lower()
+        write_uuid = self.uuids.write.lower()
 
-    # ждём пока BlueZ полностью прочитает GATT
-        for _ in range(50):
-            if dev_props.Get("org.bluez.Device1", "ServicesResolved"):
-                break
-            time.sleep(0.1)
+        objects = mgr.GetManagedObjects()
 
-    # найти сервис
+    # --- найти сервис ---
         service_path = None
-        for path, ifaces in mgr.GetManagedObjects().items():
+        for path, ifaces in objects.items():
             svc = ifaces.get("org.bluez.GattService1")
-            if svc and svc.get("UUID") == self.uuids.service and svc.get("Device") == self.device_path:
+            if not svc:
+                continue
+
+            if svc.get("UUID") == service_uuid and svc.get("Device") == self.device_path:
                 service_path = path
                 break
 
         if not service_path:
-            raise Exception("Сервис не найден")
+            raise Exception(f"Service {service_uuid} not found for device {self.device_path}")
 
-    # найти характеристику
+    # --- найти write характеристику ---
         char_path = None
-        for path, ifaces in mgr.GetManagedObjects().items():
+        for path, ifaces in objects.items():
             chr = ifaces.get("org.bluez.GattCharacteristic1")
-            if chr and chr.get("UUID") == self.uuids.write.lower() and chr.get("Service") == service_path:
+            if not chr:
+                continue
+
+            if chr.get("UUID") == write_uuid and chr.get("Service") == service_path:
                 char_path = path
                 break
 
         if not char_path:
-            raise Exception("Характеристика не найдена")
+            raise Exception(f"Write characteristic {write_uuid} not found")
 
-    # запись
-        char = dbus.Interface(self.bus.get_object("org.bluez", char_path),
-                          "org.bluez.GattCharacteristic1")
+    # --- запись ---
+        char = dbus.Interface(
+        self.bus.get_object("org.bluez", char_path),
+        "org.bluez.GattCharacteristic1"
+    )
 
         char.WriteValue([dbus.Byte(b) for b in data], {})
 
         self.device.Disconnect()
+        return True
 
 
     def recvall(self, size: int) -> bytes:
