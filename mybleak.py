@@ -61,7 +61,7 @@ class BleGatt(BaseBle):
                     props = ifaces[self._device_iface]
                     addr = props.get("Address")
                     name = props.get("Name") or props.get("Alias")
-                    data = {"addr": addr, "name": name}
+                    data = {"addr": str(addr), "name": str(name)}
                     if addr and data not in devicelist:
                         devicelist.append(data)
             time.sleep(0.01)
