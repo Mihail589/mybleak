@@ -139,13 +139,14 @@ class BleGatt(BaseBle):
     
     
     def write(self, data: bytes) -> bool:
+        mgr = dbus.Interface(self.bus.get_object("org.bluez", "/"),
+                         "org.freedesktop.DBus.ObjectManager")
         self.device.Connect()
 
     # найти сервис
         service_path = None
-        for path, ifaces in self.manager.GetManagedObjects().items():
+        for path, ifaces in mgr.GetManagedObjects().items():
             svc = ifaces.get("org.bluez.GattService1")
-            print(svc.get("UUID"))
             if svc and svc.get("UUID") == self.uuids.service and svc.get("Device") == self.device_path:
                 service_path = path
                 break
@@ -155,7 +156,7 @@ class BleGatt(BaseBle):
 
     # найти характеристику
         char_path = None
-        for path, ifaces in self.manager.GetManagedObjects().items():
+        for path, ifaces in mgr.GetManagedObjects().items():
             chr = ifaces.get("org.bluez.GattCharacteristic1")
             if chr and chr.get("UUID") == self.uuids.write and chr.get("Service") == service_path:
                 char_path = path
