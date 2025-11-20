@@ -140,8 +140,20 @@ class BleGatt(BaseBle):
     
     def write(self, data: bytes) -> bool:
         mgr = dbus.Interface(self.bus.get_object("org.bluez", "/"),
-                         "org.freedesktop.DBus.ObjectManager")
+                     "org.freedesktop.DBus.ObjectManager")
+
+    # подключение
         self.device.Connect()
+
+    # дождаться ServicesResolved
+        dev_props = dbus.Interface(self.bus.get_object("org.bluez", self.device_path),
+                               "org.freedesktop.DBus.Properties")
+
+    # ждём пока BlueZ полностью прочитает GATT
+        for _ in range(50):
+            if dev_props.Get("org.bluez.Device1", "ServicesResolved"):
+                break
+            time.sleep(0.1)
 
     # найти сервис
         service_path = None
@@ -152,7 +164,7 @@ class BleGatt(BaseBle):
                 break
 
         if not service_path:
-            raise Exception(f"Сервис не найден {self.uuids.service} {self.device_path}")
+            raise Exception("Сервис не найден")
 
     # найти характеристику
         char_path = None
@@ -172,6 +184,7 @@ class BleGatt(BaseBle):
         char.WriteValue([dbus.Byte(b) for b in data], {})
 
         self.device.Disconnect()
+
 
     def recvall(self, size: int) -> bytes:
         return super().recvall(size)
