@@ -1,10 +1,12 @@
 from base_ble import *
 import dbus, dbus.mainloop.glib
-from gi.repository import GLib
+
+class BluetoothError(Exception):
+    pass
+
 class BleGatt(BaseBle):
     def __init__(self, address: Optional[str] = None, uuids: Optional[DeviceUuids] = None, is_server: bool = False, server_search_time: float | None = None):
         super().__init__(address, uuids, is_server, server_search_time)
-        POLL_INTERVAL = 0.5  # как часто опрашивать D-Bus
 
         self._busname = "org.bluez"
         self._obj_manager_iface = "org.freedesktop.DBus.ObjectManager"
@@ -13,6 +15,14 @@ class BleGatt(BaseBle):
         self.bus = dbus.SystemBus()
         self.manager = dbus.Interface(self.bus.get_object(self._busname, "/"), self._obj_manager_iface)
         print(address, uuids)
+        self.adapter_path = None
+        for path, ifaces in self.manager.GetManagedObjects().items():
+            if self._adapter_iface in ifaces:
+                self.adapter_path = path
+                break
+
+        if not self.adapter_path:
+            raise BluetoothError("Отсутствуе блютуз адаптер")
     
     def set_self_name(self, adapter_name: str) -> bool:
         return super().set_self_name(adapter_name)
@@ -52,15 +62,14 @@ class BleGatt(BaseBle):
         return super().is_advertising
     
     def is_bluetooth_on(self):
-        adapter_path = None
-        for path, ifaces in self.manager.GetManagedObjects().items():
-            if self._adapter_iface in ifaces:
-                adapter_path = path
-                break
+        
+        adapter_props = dbus.Interface(
+        self.bus.get_object("org.bluez", self.adapter_path),
+    "org.freedesktop.DBus.Properties"
+)
 
-        if not adapter_path:
-            print(path)
-
+        powered = adapter_props.Get("org.bluez.Adapter1", "Powered")
+        return powered
     def name(self) -> Optional[str]:
         return super().name
     
