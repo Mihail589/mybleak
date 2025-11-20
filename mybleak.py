@@ -170,7 +170,7 @@ class BleGatt(BaseBle):
         char_path = None
         for path, ifaces in mgr.GetManagedObjects().items():
             chr = ifaces.get("org.bluez.GattCharacteristic1")
-            if chr and chr.get("UUID") == self.uuids.write and chr.get("Service") == service_path:
+            if chr and chr.get("UUID") == self.uuids.write.lower() and chr.get("Service") == service_path:
                 char_path = path
                 break
 
