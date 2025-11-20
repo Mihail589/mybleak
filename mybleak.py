@@ -152,7 +152,7 @@ class BleGatt(BaseBle):
                 break
 
         if not service_path:
-            raise Exception("Сервис не найден")
+            raise Exception(f"Сервис не найден {self.uuids.service} {self.device_path}")
 
     # найти характеристику
         char_path = None
