@@ -144,7 +144,7 @@ class BleGatt(BaseBle):
             svc = ifaces.get("org.bluez.GattService1")
             char = ifaces.get("org.bluez.GattCharacteristic1")
             if svc and char and path.startswith(self.device_path):
-                if svc.get("UUID") == self.uuids.service and char.get("UUID") == self.uuids.write:
+                if svc.get("UUID") == self.uuids.service:
                     char_path = path
                     break
 
