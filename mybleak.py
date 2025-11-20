@@ -1,5 +1,5 @@
 from base_ble import *
-import dbus, dbus.mainloop.glib
+import dbus, time
 
 class BluetoothError(Exception):
     pass
@@ -44,7 +44,11 @@ class BleGatt(BaseBle):
         return super().discovered_uuids
     
     def discover(self, scan_duration: float = 10.) -> Set[Any]:
-        self.is_bluetooth_on()
+        if not self.is_bluetooth_on():
+            raise BluetoothError("Bluetooth is off")
+        devicelist = set()
+        #self.adapter.StartDiscovery()
+        print(devicelist)
         
     
     def fileno(self) -> int:
