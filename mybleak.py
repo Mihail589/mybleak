@@ -25,7 +25,7 @@ class BleGatt(BaseBle):
         
         self.adapter = dbus.Interface(
         self.bus.get_object("org.bluez", self.adapter_path),
-    "org.freedesktop.DBus.Properties"
+    self._adapter_iface
 )
     
     def set_self_name(self, adapter_name: str) -> bool:
@@ -60,7 +60,9 @@ class BleGatt(BaseBle):
                     if addr and data not in devicelist:
                         devicelist.append(data)
             time.sleep(0.01)
-    
+        self.adapter.StartDiscovery()
+        return devicelist
+
     def fileno(self) -> int:
         return super().fileno()
     
@@ -118,4 +120,4 @@ class BleGatt(BaseBle):
     def recvall(self, size: int) -> bytes:
         return super().recvall(size)
 
-BleGatt("34:B7:DA:DB:F6:82", "UUDD").discover()
+print(BleGatt("34:B7:DA:DB:F6:82", "UUDD").discover())
