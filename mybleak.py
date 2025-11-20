@@ -19,8 +19,10 @@ class BleGatt(BaseBle):
             self.device_path = None
             for path, ifaces in self.manager.GetManagedObjects().items():
                 dev = ifaces.get("org.bluez.Device1")
+                print(path)
                 if dev and dev.get("Address") == address:
                     self.device_path = path
+                    
                     break
 
             if not self.device_path:
