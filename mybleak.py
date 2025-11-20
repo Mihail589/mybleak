@@ -14,7 +14,6 @@ class BleGatt(BaseBle):
         self._device_iface = "org.bluez.Device1"
         self.bus = dbus.SystemBus()
         self.manager = dbus.Interface(self.bus.get_object(self._busname, "/"), self._obj_manager_iface)
-        print(address, uuids)
         self.adapter_path = None
         for path, ifaces in self.manager.GetManagedObjects().items():
             if self._adapter_iface in ifaces:
@@ -22,7 +21,7 @@ class BleGatt(BaseBle):
                 break
 
         if not self.adapter_path:
-            raise BluetoothError("Отсутствуе блютуз адаптер")
+            raise BluetoothError("Not Found Bluetooth adapter")
         
         self.adapter = dbus.Interface(
         self.bus.get_object("org.bluez", self.adapter_path),
