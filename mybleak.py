@@ -145,6 +145,7 @@ class BleGatt(BaseBle):
         service_path = None
         for path, ifaces in self.manager.GetManagedObjects().items():
             svc = ifaces.get("org.bluez.GattService1")
+            print(svc.get("UUID"))
             if svc and svc.get("UUID") == self.uuids.service and svc.get("Device") == self.device_path:
                 service_path = path
                 break
