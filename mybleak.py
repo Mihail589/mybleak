@@ -137,24 +137,15 @@ class BleGatt(BaseBle):
     def set_timeout(self, timeout: Optional[float] = None):
         return super().set_timeout(timeout)
     
-    def find_characteristic(self, device_mac, service_uuid, char_uuid):
-        device_path = None
-
-    # найти устройство
-        for path, ifaces in self.manager.GetManagedObjects().items():
-            dev = ifaces.get("org.bluez.Device1")
-            if dev and dev.get("Address") == device_mac:
-                device_path = path
-                break
-
-        if not device_path:
-            raise Exception("Устройство не найдено")
+    
+    def write(self, data: bytes) -> bool:
+        self.device.Connect()
 
     # найти сервис
         service_path = None
         for path, ifaces in self.manager.GetManagedObjects().items():
             svc = ifaces.get("org.bluez.GattService1")
-            if svc and svc.get("UUID") == service_uuid and svc.get("Device") == device_path:
+            if svc and svc.get("UUID") == self.uuids.service and svc.get("Device") == self.device_path:
                 service_path = path
                 break
 
@@ -162,34 +153,23 @@ class BleGatt(BaseBle):
             raise Exception("Сервис не найден")
 
     # найти характеристику
+        char_path = None
         for path, ifaces in self.manager.GetManagedObjects().items():
             chr = ifaces.get("org.bluez.GattCharacteristic1")
-            if chr and chr.get("UUID") == char_uuid and chr.get("Service") == service_path:
-                return path
+            if chr and chr.get("UUID") == self.uuids.write and chr.get("Service") == service_path:
+                char_path = path
+                break
 
-        raise Exception("Характеристика в сервисе не найдена")
+        if not char_path:
+            raise Exception("Характеристика не найдена")
 
-    def write(self, data: bytes) -> bool:
-        #self.device.Connect()
-        #char_path = None
-        #for path, ifaces in self.manager.GetManagedObjects().items():
-         #   svc = ifaces.get("org.bluez.GattService1")
-          #  char = ifaces.get("org.bluez.GattCharacteristic1")
-           # if svc and char and path.startswith(self.device_path):
-            #    if svc.get("UUID") == self.uuids.service and char.get("UUID") == self.uuids.write:
-             #       char_path = path
-              #      break
+    # запись
+        char = dbus.Interface(self.bus.get_object("org.bluez", char_path),
+                          "org.bluez.GattCharacteristic1")
 
-        #if not char_path:
-         #   raise Exception("Характеристика в сервисе не найдена")
+        char.WriteValue([dbus.Byte(b) for b in data], {})
 
-        #characteristic = dbus.Interface(self.bus.get_object("org.bluez", char_path),
-         #                       "org.bluez.GattCharacteristic1")
-
-        #data = [dbus.Byte(b) for b in data]
-        #characteristic.WriteValue(data, {})
-        #self.device.Disconect()
-        print(self.find_characteristic(self.address, self.uuids.service, self.uuids.write))
+        self.device.Disconnect()
 
     def recvall(self, size: int) -> bytes:
         return super().recvall(size)
