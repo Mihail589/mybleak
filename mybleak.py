@@ -15,18 +15,7 @@ class BleGatt(BaseBle):
         self._dbussetting()
         self.address = address
         self.uuids = uuids
-        if address:
-            self.device_path = None
-            for path, ifaces in self.manager.GetManagedObjects().items():
-                dev = ifaces.get("org.bluez.Device1")
-                if dev and dev.get("Address") == address:
-                    self.device_path = path
-                    
-                    break
-
-            if not self.device_path:
-                raise Exception("Устройство не найдено")
-            self.device = dbus.Interface(self.bus.get_object("org.bluez", self.device_path), "org.bluez.Device1")
+        
 
 
     def _dbussetting(self):
@@ -58,6 +47,18 @@ class BleGatt(BaseBle):
         return super().advertise(timeout)
     
     def connect(self, device: Any) -> bool:
+        if device:
+            self.device_path = None
+            for path, ifaces in self.manager.GetManagedObjects().items():
+                dev = ifaces.get("org.bluez.Device1")
+                if dev and dev.get("Address") == device:
+                    self.device_path = path
+                    
+                    break
+
+            if not self.device_path:
+                raise Exception("Устройство не найдено")
+            self.device = dbus.Interface(self.bus.get_object("org.bluez", self.device_path), "org.bluez.Device1")
         self.device.Connect()
     
     def connected(self) -> bool:
@@ -104,6 +105,9 @@ class BleGatt(BaseBle):
     def is_advertising(self) -> bool:
         return super().is_advertising
     
+    def Disconnect(self):
+        self.device.Disconnect()
+    
     def is_bluetooth_on(self):
         
         
@@ -140,7 +144,6 @@ class BleGatt(BaseBle):
     
     def write(self, data: bytes) -> bool:
         
-        self.connect(self.address)
     # найти сервис
         service_path = None
         for path, ifaces in self.manager.GetManagedObjects().items():
@@ -169,9 +172,11 @@ class BleGatt(BaseBle):
 
         char.WriteValue([dbus.Byte(b) for b in data], {})
 
-        self.device.Disconnect()
+        
         return True
     def recvall(self, size: int) -> bytes:
         return super().recvall(size)
 print(BleGatt().discover(3))
-print(BleGatt("34:B7:DA:DB:F6:82", DeviceUuids("0000abf0-0000-1000-8000-00805f9b34fb", "0000abf1-0000-1000-8000-00805f9b34fb", "0000abf2-0000-1000-8000-00805f9b34fb")).write(b'$M<\x00\x04\x04'))
+ble = BleGatt(uuids = DeviceUuids("0000abf0-0000-1000-8000-00805f9b34fb", "0000abf1-0000-1000-8000-00805f9b34fb", "0000abf2-0000-1000-8000-00805f9b34fb"))
+ble.connect("34:B7:DA:DB:F6:82")
+ble.write(b'$M<\x00\x04\x04')
