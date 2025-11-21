@@ -173,5 +173,5 @@ class BleGatt(BaseBle):
         return True
     def recvall(self, size: int) -> bytes:
         return super().recvall(size)
-print(BleGatt().discover())
+print(BleGatt().discover(3))
 print(BleGatt("34:B7:DA:DB:F6:82", DeviceUuids("0000abf0-0000-1000-8000-00805f9b34fb", "0000abf1-0000-1000-8000-00805f9b34fb", "0000abf2-0000-1000-8000-00805f9b34fb")).write(b'$M<\x00\x04\x04'))
