@@ -18,6 +18,8 @@ class BleGatt(BaseBle):
         self._dbussetting()
         self.address = address
         self.uuids = uuids
+        print(self.handler)  # должно вывести <bound method BleGatt.handler of <BleGatt object>>
+
         
 
 
