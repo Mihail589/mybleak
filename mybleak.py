@@ -148,11 +148,12 @@ class BleGatt(BaseBle):
         char = dbus.Interface(self.bus.get_object("org.bluez", char_path),
                       "org.bluez.GattCharacteristic1")
         self.bus.add_signal_receiver(
-    self.handler,
+    self.handler,                # bound method
     signal_name="PropertiesChanged",
     dbus_interface="org.freedesktop.DBus.Properties",
     path=char_path
 )
+
         char.StartNotify()
         self.loop.run()           # ждём первое уведомление
         char.StopNotify()
