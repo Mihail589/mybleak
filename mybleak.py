@@ -1,6 +1,7 @@
 from base_ble import *
 import dbus, time
-import dbus.mainloop
+import dbus.mainloop.glib
+from gi import GLib
 
 class BluetoothError(Exception):
     pass
@@ -124,10 +125,12 @@ class BleGatt(BaseBle):
     def handler(self, i, changed, inv, path):
         if "Value" in changed:
             self.received = bytes(changed["Value"])
+            self.loop.quit()
 
 
     def read_packet(self) -> bytes:
-
+        dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+        self.loop = GLib.MainLoop()
         objs = self.manager.GetManagedObjects()
         self.received = None
         svc_path = next(p for p, ifs in objs.items()
@@ -151,14 +154,8 @@ class BleGatt(BaseBle):
 )
 
         char.StartNotify()
-
-        print("Waiting for notify...")
-
-# --- последовательное ожидание notify ---
-        while self.received is None:
-    # обрабатываем dbus-события один шаг
-            self.bus.flush()
-            time.sleep(0.01)
+        self.loop.run()           # ждём первое уведомление
+        char.StopNotify()
         return self.received
 
     def receive(self) -> bytes:
