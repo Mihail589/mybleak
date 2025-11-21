@@ -150,7 +150,7 @@ class BleGatt(BaseBle):
                 break
 
         if not service_path:
-            return False
+            raise Exception("Сервис не найден")
 
     # найти характеристику
         char_path = None
@@ -161,7 +161,7 @@ class BleGatt(BaseBle):
                 break
 
         if not char_path:
-            return False
+            raise Exception("Характеристика не найдена")
 
     # запись
         char = dbus.Interface(self.bus.get_object("org.bluez", char_path),
@@ -170,7 +170,7 @@ class BleGatt(BaseBle):
         char.WriteValue([dbus.Byte(b) for b in data], {})
 
         self.device.Disconnect()
-        return True
+
     def recvall(self, size: int) -> bytes:
         return super().recvall(size)
 print(BleGatt().discover(2))
