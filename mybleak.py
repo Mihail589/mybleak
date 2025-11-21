@@ -18,7 +18,7 @@ class BleGatt(BaseBle):
         self._dbussetting()
         self.address = address
         self.uuids = uuids
-        print(self.handler)  # должно вывести <bound method BleGatt.handler of <BleGatt object>>
+       
 
         
 
@@ -131,9 +131,9 @@ class BleGatt(BaseBle):
             self.loop.quit()
 
 
-    def read_packet(self) -> bytes:
+    def read_packet(self) -> bytes: 
         
-        self.loop = GLib.MainLoop()
+        
         objs = self.manager.GetManagedObjects()
         self.received = None
         svc_path = next(p for p, ifs in objs.items()
@@ -154,8 +154,8 @@ class BleGatt(BaseBle):
     signal_name="PropertiesChanged",
     dbus_interface="org.freedesktop.DBus.Properties",
     path=char_path
-)
-
+)       
+        self.loop = GLib.MainLoop()
         char.StartNotify()
         self.loop.run()           # ждём первое уведомление
         char.StopNotify()
