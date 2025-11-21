@@ -14,6 +14,7 @@ class BleGatt(BaseBle):
         self._obj_manager_iface = "org.freedesktop.DBus.ObjectManager"
         self._adapter_iface = "org.bluez.Adapter1"
         self._device_iface = "org.bluez.Device1"
+        dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
         self._dbussetting()
         self.address = address
         self.uuids = uuids
@@ -129,7 +130,7 @@ class BleGatt(BaseBle):
 
 
     def read_packet(self) -> bytes:
-        dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+        
         self.loop = GLib.MainLoop()
         objs = self.manager.GetManagedObjects()
         self.received = None
