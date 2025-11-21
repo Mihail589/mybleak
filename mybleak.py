@@ -58,7 +58,7 @@ class BleGatt(BaseBle):
         return super().advertise(timeout)
     
     def connect(self, device: Any) -> bool:
-        return super().connect(device)
+        self.device.Connect()
     
     def connected(self) -> bool:
         return super().connected
@@ -139,8 +139,8 @@ class BleGatt(BaseBle):
     
     
     def write(self, data: bytes) -> bool:
-        self.device.Connect()
-
+        
+        self.connect(self.address)
     # найти сервис
         service_path = None
         for path, ifaces in self.manager.GetManagedObjects().items():
