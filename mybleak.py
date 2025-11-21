@@ -136,6 +136,8 @@ class BleGatt(BaseBle):
 # --- read ---
         char = dbus.Interface(self.bus.get_object("org.bluez", char_path),
                       "org.bluez.GattCharacteristic1")
+        
+        return bytes(char.ReadValue({}))
 
     def receive(self) -> bytes:
         return super().receive()
@@ -194,3 +196,4 @@ print(BleGatt().discover(3))
 ble = BleGatt(uuids = DeviceUuids("0000abf0-0000-1000-8000-00805f9b34fb", "0000abf1-0000-1000-8000-00805f9b34fb", "0000abf2-0000-1000-8000-00805f9b34fb"))
 ble.connect("34:B7:DA:DB:F6:82")
 ble.write(b'$M<\x00\x04\x04')
+print(ble.read_packet())
