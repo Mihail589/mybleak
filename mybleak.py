@@ -121,7 +121,21 @@ class BleGatt(BaseBle):
         return super().read(size)
 
     def read_packet(self) -> bytes:
-        return super().read_packet()
+        objs = self.manager.GetManagedObjects()
+        svc_path = next(path for path, ifs in objs.items()
+                if "org.bluez.GattService1" in ifs
+                and ifs["org.bluez.GattService1"]["UUID"] == str(self.uuids.service)
+                and str(ifs["org.bluez.GattService1"]["Device"]) == self.device_path)
+
+# --- find characteristic in service ---
+        char_path = next(path for path, ifs in objs.items()
+                 if "org.bluez.GattCharacteristic1" in ifs
+                 and ifs["org.bluez.GattCharacteristic1"]["UUID"] == str(self.uuids.notify)
+                 and str(ifs["org.bluez.GattCharacteristic1"]["Service"]) == svc_path)
+
+# --- read ---
+        char = dbus.Interface(self.bus.get_object("org.bluez", char_path),
+                      "org.bluez.GattCharacteristic1")
 
     def receive(self) -> bytes:
         return super().receive()
