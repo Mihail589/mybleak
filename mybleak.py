@@ -120,24 +120,44 @@ class BleGatt(BaseBle):
     def read(self, size: int = 1) -> bytes:
         return super().read(size)
 
+    def handler(self, i, changed, inv, path):
+        if "Value" in changed:
+            self.received = bytes(changed["Value"])
+
+
     def read_packet(self) -> bytes:
         objs = self.manager.GetManagedObjects()
-        svc_path = next(path for path, ifs in objs.items()
-                if "org.bluez.GattService1" in ifs
-                and ifs["org.bluez.GattService1"]["UUID"] == str(self.uuids.service)
-                and str(ifs["org.bluez.GattService1"]["Device"]) == self.device_path)
+        self.received = None
+        svc_path = next(p for p, ifs in objs.items()
+    if "org.bluez.GattService1" in ifs
+    and ifs["org.bluez.GattService1"]["UUID"] == str(self.uuids.service)
+    and str(ifs["org.bluez.GattService1"]["Device"]) == self.device_path)
 
-# --- find characteristic in service ---
-        char_path = next(path for path, ifs in objs.items()
-                 if "org.bluez.GattCharacteristic1" in ifs
-                 and ifs["org.bluez.GattCharacteristic1"]["UUID"] == str(self.uuids.notify)
-                 and str(ifs["org.bluez.GattCharacteristic1"]["Service"]) == svc_path)
+# --- find characteristic ---
+        char_path = next(p for p, ifs in objs.items()
+    if "org.bluez.GattCharacteristic1" in ifs
+    and ifs["org.bluez.GattCharacteristic1"]["UUID"] == str(self.uuids.notify)
+    and str(ifs["org.bluez.GattCharacteristic1"]["Service"]) == svc_path)
 
-# --- read ---
         char = dbus.Interface(self.bus.get_object("org.bluez", char_path),
                       "org.bluez.GattCharacteristic1")
-        
-        return bytes(char.ReadValue({}))
+        self.bus.add_signal_receiver(
+    self.handler,
+    dbus_interface="org.freedesktop.DBus.Properties",
+    signal_name="PropertiesChanged",
+    path=char_path
+)
+
+        char.StartNotify()
+
+        print("Waiting for notify...")
+
+# --- последовательное ожидание notify ---
+        while self.received is None:
+    # обрабатываем dbus-события один шаг
+            self.bus.flush()
+            time.sleep(0.01)
+        return self.received
 
     def receive(self) -> bytes:
         return super().receive()
