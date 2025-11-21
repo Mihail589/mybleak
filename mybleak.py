@@ -127,7 +127,7 @@ class BleGatt(BaseBle):
 
 
     def read_packet(self) -> bytes:
-        dbus.mainloop.NativeMainLoop().init()
+
         objs = self.manager.GetManagedObjects()
         self.received = None
         svc_path = next(p for p, ifs in objs.items()
