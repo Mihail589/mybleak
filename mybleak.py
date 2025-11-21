@@ -1,5 +1,6 @@
 from base_ble import *
 import dbus, time
+import dbus.mainloop
 
 class BluetoothError(Exception):
     pass
@@ -126,6 +127,7 @@ class BleGatt(BaseBle):
 
 
     def read_packet(self) -> bytes:
+        dbus.mainloop.NativeMainLoop().setup()
         objs = self.manager.GetManagedObjects()
         self.received = None
         svc_path = next(p for p, ifs in objs.items()
