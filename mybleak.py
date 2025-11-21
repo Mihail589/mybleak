@@ -123,7 +123,7 @@ class BleGatt(BaseBle):
     def read(self, size: int = 1) -> bytes:
         return super().read(size)
 
-    def handler(self, i, changed, inv, path):
+    def handler(self, iface, changed, invalidated, path):
         if "Value" in changed:
             self.received = bytes(changed["Value"])
             self.loop.quit()
