@@ -1,7 +1,7 @@
 from base_ble import *
 import dbus, time
 import dbus.mainloop.glib
-from gi import GLib
+from gi.repository import GLib
 
 class BluetoothError(Exception):
     pass
