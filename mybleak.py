@@ -170,7 +170,7 @@ class BleGatt(BaseBle):
         char.WriteValue([dbus.Byte(b) for b in data], {})
 
         self.device.Disconnect()
-
+        return True
     def recvall(self, size: int) -> bytes:
         return super().recvall(size)
 print(BleGatt().discover(2))
