@@ -287,6 +287,7 @@ def main():
 
     print("Server started. Main thread is synchronous; GLib loop runs in background.")
     print("Make sure adapter hci0 is powered and supports advertising. Run 'bluetoothctl show' to check.")
+    print('"'+SERVICE_UUID+'"', '"'+WRITE_UUID+'"', '"'+NOTIFY_UUID+'"')
 
     # Синхронная часть — можно делать свою логику здесь
     try:
