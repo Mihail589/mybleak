@@ -134,13 +134,14 @@ class WriteChar(Characteristic):
         self.notify_char = notify_char
 
     @dbus.service.method("org.bluez.GattCharacteristic1",
-                         in_signature="ay", out_signature="")
+                         in_signature="aya{sv}", out_signature="")
     def WriteValue(self, value, options):
         data = bytes(value)
         print("WRITE:", data)
 
-        # пересылка в notify
+        # Отправляем в notify
         self.notify_char.send_notify(data)
+
 
 
 # ====================== MAIN =========================
