@@ -216,7 +216,7 @@ class BleGatt(BaseBle):
     def recvall(self, size: int) -> bytes:
         return super().recvall(size)
 print(BleGatt().discover())
-ble = BleGatt(uuids = DeviceUuids("12345678-1234-5678-1234-56789abcdef0", "12345678-1234-5678-1234-56789abcdef1", "12345678-1234-5678-1234-56789abcdef2"))
+ble = BleGatt(uuids = DeviceUuids("12345678-1234-5678-1234-56798abcdef0", "12345678-1234-5678-1234-56798abcdef1", "12345678-1234-5678-1234-56798abcdef2"))
 ble.connect("B8:27:EB:06:5D:3D")
 print(ble.write(b'$M<\x00\x01\x01'))
 print(ble.read_packet())
