@@ -6,7 +6,7 @@ BLE GATT Peripheral (BlueZ + D-Bus)
 - При WriteValue данные сразу отправляются в Notify (если клиент включил уведомления)
 - Добавлен дескриптор CCCD (0x2902) для Notify
 - GLib loop запускается в фоновом потоке; основной поток синхронный (while True)
-Запуск: sudo python3 ble_server_with_cccd.py
+Запуск: sudo python3 ble_server_fixed_adv.py
 """
 
 import dbus
@@ -248,12 +248,12 @@ class Advertisement(dbus.service.Object):
     def GetAll(self, interface):
         if interface != self.IFACE:
             raise InvalidArgsException()
+        # Minimal, compatible advertisement: no Includes
         props = {
             "Type": dbus.String("peripheral"),
             "LocalName": dbus.String(self.local_name),
             "ServiceUUIDs": dbus.Array(self.service_uuids, signature='s'),
             "Discoverable": dbus.Boolean(True),
-            "Includes": dbus.Array(["tx-power", "local-name"], signature='s'),
         }
         return props
 
