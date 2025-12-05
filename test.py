@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 import dbus
 import dbus.service
-import dbus.mainloop
+import dbus.mainloop.glib
+from gi.repository import GLib
+import threading
 import time
 
 BLUEZ = "org.bluez"
@@ -12,7 +14,7 @@ WRITE_UUID   = "12345678-1234-5678-1234-56789abcdef1"
 NOTIFY_UUID  = "12345678-1234-5678-1234-56789abcdef2"
 
 
-# ====================== Base Classes =========================
+# =======================================================
 
 class Application(dbus.service.Object):
     def __init__(self, bus):
@@ -20,24 +22,23 @@ class Application(dbus.service.Object):
         self.services = []
         super().__init__(bus, self.path)
 
-    def add_service(self, service):
-        self.services.append(service)
+    def add_service(self, s):
+        self.services.append(s)
 
     @dbus.service.method("org.freedesktop.DBus.ObjectManager",
                          out_signature="a{oa{sa{sv}}}")
     def GetManagedObjects(self):
-        result = {}
+        res = {}
         for s in self.services:
-            result[s.get_path()] = s.get_properties()
+            res[s.get_path()] = s.get_properties()
             for ch in s.characteristics:
-                result[ch.get_path()] = ch.get_properties()
-        return result
+                res[ch.get_path()] = ch.get_properties()
+        return res
 
 
 class Service(dbus.service.Object):
-    def __init__(self, bus, index, uuid, primary):
+    def __init__(self, bus, index, uuid, primary=True):
         self.path = f"/service{index}"
-        self.bus = bus
         self.uuid = uuid
         self.primary = primary
         self.characteristics = []
@@ -54,10 +55,7 @@ class Service(dbus.service.Object):
             "org.bluez.GattService1": {
                 "UUID": self.uuid,
                 "Primary": self.primary,
-                "Characteristics": dbus.Array(
-                    [c.get_path() for c in self.characteristics],
-                    signature="o"
-                )
+                "Characteristics": [c.get_path() for c in self.characteristics]
             }
         }
 
@@ -65,7 +63,6 @@ class Service(dbus.service.Object):
 class Characteristic(dbus.service.Object):
     def __init__(self, bus, index, uuid, flags, service):
         self.path = service.get_path() + f"/char{index}"
-        self.bus = bus
         self.uuid = uuid
         self.flags = flags
         self.service = service
@@ -80,38 +77,31 @@ class Characteristic(dbus.service.Object):
             "org.bluez.GattCharacteristic1": {
                 "Service": self.service.get_path(),
                 "UUID": self.uuid,
-                "Flags": self.flags
+                "Flags": self.flags,
             }
         }
 
-    @dbus.service.method("org.bluez.GattCharacteristic1",
-                         in_signature="", out_signature="")
+    @dbus.service.method("org.bluez.GattCharacteristic1")
     def StartNotify(self):
         self.notifying = True
         print("Notify enabled")
 
-    @dbus.service.method("org.bluez.GattCharacteristic1",
-                         in_signature="", out_signature="")
+    @dbus.service.method("org.bluez.GattCharacteristic1")
     def StopNotify(self):
         self.notifying = False
         print("Notify disabled")
 
 
-# ====================== Notify Characteristic =========================
-
 class NotifyChar(Characteristic):
     def __init__(self, bus, index, service):
         super().__init__(bus, index, NOTIFY_UUID, ["notify"], service)
-        self.value = b""
 
-    def send_notify(self, data: bytes):
+    def send(self, data: bytes):
         if not self.notifying:
-            print("Notify not active by client")
+            print("Notify is off")
             return
 
-        self.value = data
-
-        arr = dbus.Array([dbus.Byte(b) for b in data], signature="y")
+        arr = [dbus.Byte(b) for b in data]
 
         self.PropertiesChanged(
             "org.bluez.GattCharacteristic1",
@@ -126,42 +116,35 @@ class NotifyChar(Characteristic):
         pass
 
 
-# ====================== Write Characteristic =========================
-
 class WriteChar(Characteristic):
     def __init__(self, bus, index, service, notify_char):
         super().__init__(bus, index, WRITE_UUID, ["write"], service)
         self.notify_char = notify_char
 
     @dbus.service.method("org.bluez.GattCharacteristic1",
-                         in_signature="aya{sv}", out_signature="")
+                         in_signature="aya{sv}")
     def WriteValue(self, value, options):
         data = bytes(value)
         print("WRITE:", data)
-
-        # Отправляем в notify
-        self.notify_char.send_notify(data)
+        self.notify_char.send(data)
 
 
+# =======================================================
 
-# ====================== MAIN =========================
+def run_dbus_loop():
+    loop = GLib.MainLoop()
+    loop.run()
+
 
 def main():
-    # создаём "нативную" синхронную D-Bus-петлю
-    dbus.mainloop.NativeMainLoop().setup()
-
+    dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
     bus = dbus.SystemBus()
 
     adapter = "/org/bluez/hci0"
-    gatt_mgr = dbus.Interface(
-        bus.get_object(BLUEZ, adapter), GATT_MANAGER
-    )
+    gatt = dbus.Interface(bus.get_object(BLUEZ, adapter), GATT_MANAGER)
 
-    # приложение
     app = Application(bus)
-
-    # сервис
-    service = Service(bus, 0, SERVICE_UUID, True)
+    service = Service(bus, 0, SERVICE_UUID)
 
     notify_char = NotifyChar(bus, 0, service)
     write_char  = WriteChar(bus, 1, service, notify_char)
@@ -170,19 +153,20 @@ def main():
     service.add_characteristic(write_char)
     app.add_service(service)
 
-    # регистрация приложения
-    gatt_mgr.RegisterApplication(
-        app.get_path(),
-        {},
-        reply_handler=lambda: print("GATT server started"),
-        error_handler=lambda e: print("Error:", e)
+    gatt.RegisterApplication(app.get_path(), {},
+        reply_handler=lambda: print("GATT registered"),
+        error_handler=lambda e: print("ERR:", e)
     )
 
-    # === СИНХРОННЫЙ цикл ===
-    print("Running synchronously. Waiting for BLE events...")
+    # ---- запускаем GLib в отдельном потоке ----
+    t = threading.Thread(target=run_dbus_loop, daemon=True)
+    t.start()
 
+    print("MAIN LOOP: synchronous code running")
+
+    # ---- ваш собственный синхронный цикл ----
     while True:
-        time.sleep(0.1)  # синхронная пауза
+        time.sleep(1)
 
 
 if __name__ == "__main__":
