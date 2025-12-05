@@ -25,6 +25,9 @@ class Application(dbus.service.Object):
     def add_service(self, s):
         self.services.append(s)
 
+    def get_path(self):
+        return dbus.ObjectPath(self.path)
+
     @dbus.service.method("org.freedesktop.DBus.ObjectManager",
                          out_signature="a{oa{sa{sv}}}")
     def GetManagedObjects(self):
