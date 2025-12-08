@@ -97,6 +97,7 @@ class Characteristic(dbus.service.Object):
         self.flags = flags
         self.service = service
         self.descriptors = []
+        self.notifying = False
         super().__init__(bus, self.path)
 
     def add_descriptor(self, descriptor):
@@ -114,10 +115,33 @@ class Characteristic(dbus.service.Object):
             }
         }
 
+    # Signal — стандартный org.freedesktop.DBus.Properties.PropertiesChanged
+    @dbus.service.signal(DBUS_PROP_IFACE, signature='sa{sv}as')
+    def PropertiesChanged(self, interface, changed, invalidated):
+        # тело остаётся пустым — сигнал будет отправлен автоматически
+        pass
+
     # WRITE Handler
     @dbus.service.method(IFACE, in_signature="aya{sv}", out_signature="")
     def WriteValue(self, value, options):
-        print("WRITE:", bytes(value))
+        # value приходит как массив байтов dbus.Byte (или список)
+        data_bytes = bytes(value)
+        print("WRITE received:", data_bytes)
+
+        # Если у этой характеристики есть связанная цель notify_target — отправляем уведомление туда
+        # мы ожидаем, что в main() мы установим атрибут notify_target для write-характеристики
+        if hasattr(self, "notify_target") and self.notify_target is not None:
+            try:
+                # Подготовим dbus.Array байтов с сигнатурой 'y'
+                dbus_value = dbus.Array(value, signature='y')
+                # Отправляем сигнал PropertiesChanged на путь notify-характеристики
+                # Первый аргумент — интерфейс GATT Characteristic, второй — словарь изменённых свойств
+                self.notify_target.PropertiesChanged(self.notify_target.IFACE,
+                                                    {"Value": dbus_value},
+                                                    [])
+                print("Notified notify-characteristic with:", data_bytes)
+            except Exception as e:
+                print("Failed to send notification:", e)
 
     # READ Handler
     @dbus.service.method(IFACE, in_signature="a{sv}", out_signature="ay")
@@ -125,14 +149,17 @@ class Characteristic(dbus.service.Object):
         return dbus.ByteArray(b"OK")
 
     # Notify Start
-    @dbus.service.method(IFACE)
+    @dbus.service.method(IFACE, in_signature="", out_signature="")
     def StartNotify(self):
-        pass
+        # Включаем флаг уведомлений
+        self.notifying = True
+        print(f"StartNotify called on {self.path}")
 
     # Notify Stop
-    @dbus.service.method(IFACE)
+    @dbus.service.method(IFACE, in_signature="", out_signature="")
     def StopNotify(self):
-        pass
+        self.notifying = False
+        print(f"StopNotify called on {self.path}")
 
 
 # ============================================================
@@ -163,6 +190,7 @@ class Descriptor(dbus.service.Object):
 
     @dbus.service.method(IFACE, in_signature="a{sv}", out_signature="ay")
     def ReadValue(self, options):
+        # По умолчанию читаем CCCD как enabled (0x01 0x00) — это просто пример
         return dbus.ByteArray(b"\x01\x00")
 
 
@@ -194,6 +222,9 @@ def main():
     # CCCD descriptor for notify
     cccd = Descriptor(bus, 0, "00002902-0000-1000-8000-00805f9b34fb", ["read", "write"], notify_char)
     notify_char.add_descriptor(cccd)
+
+    # Свяжем write-характеристику с notify-характеристикой — чтобы WriteValue мог отправлять уведомления
+    write_char.notify_target = notify_char
 
     print("Registering application…")
     manager.RegisterApplication(app.get_path(), {},
