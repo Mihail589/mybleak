@@ -87,7 +87,7 @@ class BleGatt(BaseBle):
                     addr = props.get("Address")
                     name = props.get("Name") or props.get("Alias")
                     rssi = props.get("RSSI")
-                    data = {"addr": str(addr), "name": str(name), "rssi": rssi}
+                    data = {"addr": str(addr), "name": str(name), "rssi": str(rssi)}
                     if addr and data not in devicelist:
                         devicelist.append(data)
             time.sleep(0.01)
