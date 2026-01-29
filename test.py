@@ -8,6 +8,7 @@ from gi.repository import GLib
 BLUEZ_SERVICE_NAME = "org.bluez"
 GATT_MANAGER_IFACE = "org.bluez.GattManager1"
 LE_ADVERTISING_MANAGER_IFACE = "org.bluez.LEAdvertisingManager1"
+ADAPTER_IFACE = "org.bluez.Adapter1"
 DBUS_OM_IFACE = "org.freedesktop.DBus.ObjectManager"
 DBUS_PROP_IFACE = "org.freedesktop.DBus.Properties"
 
@@ -126,7 +127,7 @@ class Characteristic(dbus.service.Object):
     def WriteValue(self, value, options):
         # value приходит как массив байтов dbus.Byte (или список)
         data_bytes = bytes(value)
-        print("WRITE received:", data_bytes)
+        print(f"WRITE received ({len(data_bytes)} bytes): {data_bytes.hex()}")
 
         # Если у этой характеристики есть связанная цель notify_target — отправляем уведомление туда
         # мы ожидаем, что в main() мы установим атрибут notify_target для write-характеристики
@@ -139,7 +140,7 @@ class Characteristic(dbus.service.Object):
                 self.notify_target.PropertiesChanged(self.notify_target.IFACE,
                                                     {"Value": dbus_value},
                                                     [])
-                print("Notified notify-characteristic with:", data_bytes)
+                print(f"Notified notify-characteristic with: {data_bytes.hex()}")
             except Exception as e:
                 print("Failed to send notification:", e)
 
@@ -152,14 +153,16 @@ class Characteristic(dbus.service.Object):
     @dbus.service.method(IFACE, in_signature="", out_signature="")
     def StartNotify(self):
         # Включаем флаг уведомлений
-        self.notifying = True
-        print(f"StartNotify called on {self.path}")
+        if not self.notifying:
+            self.notifying = True
+            print(f"StartNotify called on {self.path}")
 
     # Notify Stop
     @dbus.service.method(IFACE, in_signature="", out_signature="")
     def StopNotify(self):
-        self.notifying = False
-        print(f"StopNotify called on {self.path}")
+        if self.notifying:
+            self.notifying = False
+            print(f"StopNotify called on {self.path}")
 
 
 # ============================================================
@@ -190,8 +193,36 @@ class Descriptor(dbus.service.Object):
 
     @dbus.service.method(IFACE, in_signature="a{sv}", out_signature="ay")
     def ReadValue(self, options):
-        # По умолчанию читаем CCCD как enabled (0x01 0x00) — это просто пример
-        return dbus.ByteArray(b"\x01\x00")
+        # По умолчанию читаем CCCD как disabled (0x00 0x00)
+        return dbus.ByteArray(b"\x00\x00")
+
+
+# ============================================================
+# Helper Functions
+# ============================================================
+def get_adapter_mac_address(bus):
+    """Получить MAC-адрес первого доступного Bluetooth адаптера"""
+    try:
+        # Получаем менеджер объектов BlueZ
+        obj_manager = dbus.Interface(
+            bus.get_object(BLUEZ_SERVICE_NAME, "/"),
+            DBUS_OM_IFACE
+        )
+        
+        # Получаем все объекты
+        objects = obj_manager.GetManagedObjects()
+        
+        # Ищем первый адаптер
+        for path, interfaces in objects.items():
+            if ADAPTER_IFACE in interfaces:
+                adapter_props = interfaces[ADAPTER_IFACE]
+                if "Address" in adapter_props:
+                    return adapter_props["Address"]
+        
+        return None
+    except Exception as e:
+        print(f"Error getting MAC address: {e}")
+        return None
 
 
 # ============================================================
@@ -203,36 +234,60 @@ def main():
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
     bus = dbus.SystemBus()
 
+    # Получаем и выводим MAC-адрес адаптера
+    mac_address = get_adapter_mac_address(bus)
+    if mac_address:
+        print(f"Bluetooth adapter MAC address: {mac_address}")
+    else:
+        print("Warning: Could not get MAC address")
+
     # Get BlueZ objects
-    manager = dbus.Interface(bus.get_object(BLUEZ_SERVICE_NAME, "/org/bluez/hci0"),
-                             GATT_MANAGER_IFACE)
+    try:
+        manager = dbus.Interface(bus.get_object(BLUEZ_SERVICE_NAME, "/org/bluez/hci0"),
+                                 GATT_MANAGER_IFACE)
+    except dbus.exceptions.DBusException as e:
+        print(f"Error accessing Bluetooth adapter: {e}")
+        print("Make sure Bluetooth is enabled and you have proper permissions")
+        return
 
     app = Application(bus)
     service = Service(bus, 0, SERVICE_UUID, True)
     app.add_service(service)
 
     # Write characteristic
-    write_char = Characteristic(bus, 0, WRITE_UUID, ["write", "write-without-response"], service)
+    write_char = Characteristic(bus, 0, WRITE_UUID, 
+                                ["write", "write-without-response"], service)
     service.add_characteristic(write_char)
 
     # Notify characteristic
-    notify_char = Characteristic(bus, 1, NOTIFY_UUID, ["notify", "read"], service)
+    notify_char = Characteristic(bus, 1, NOTIFY_UUID, 
+                                 ["notify", "read"], service)
     service.add_characteristic(notify_char)
 
     # CCCD descriptor for notify
-    cccd = Descriptor(bus, 0, "00002902-0000-1000-8000-00805f9b34fb", ["read", "write"], notify_char)
+    cccd = Descriptor(bus, 0, "00002902-0000-1000-8000-00805f9b34fb", 
+                      ["read", "write"], notify_char)
     notify_char.add_descriptor(cccd)
 
     # Свяжем write-характеристику с notify-характеристикой — чтобы WriteValue мог отправлять уведомления
     write_char.notify_target = notify_char
 
-    print("Registering application…")
+    print("Registering GATT application…")
     manager.RegisterApplication(app.get_path(), {},
-                                reply_handler=lambda: print("GATT application registered."),
-                                error_handler=lambda e: print("Failed:", e))
+                                reply_handler=lambda: print("✓ GATT application registered successfully"),
+                                error_handler=lambda e: print(f"✗ Failed to register application: {e}"))
 
-    MAIN_LOOP = GLib.MainLoop()
-    MAIN_LOOP.run()
+    print("\nService UUID:", SERVICE_UUID)
+    print("Write characteristic UUID:", WRITE_UUID)
+    print("Notify characteristic UUID:", NOTIFY_UUID)
+    print("\nServer is running. Press Ctrl+C to stop.")
+
+    try:
+        MAIN_LOOP = GLib.MainLoop()
+        MAIN_LOOP.run()
+    except KeyboardInterrupt:
+        print("\nShutting down...")
+        MAIN_LOOP.quit()
 
 
 if __name__ == "__main__":
