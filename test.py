@@ -1,212 +1,192 @@
 #!/usr/bin/python3
 import dbus
 import dbus.service
+import dbus.mainloop.glib
 from gi.repository import GLib
+import subprocess
 
 # Настройки
 SERVICE_UUID = "12345678-1234-5678-1234-56789abcdef0"
 WRITE_UUID   = "12345678-1234-5678-1234-56789abcdef1"
 NOTIFY_UUID  = "12345678-1234-5678-1234-56789abcdef2"
 
-class GATTService(dbus.service.Object):
-    """
-    Простой GATT сервер с одной службой и двумя характеристиками
-    """
+def get_mac_address():
+    """Получить MAC адрес Bluetooth адаптера"""
+    try:
+        # Простой способ через hciconfig
+        result = subprocess.run(
+            ['hciconfig', 'hci0'],
+            capture_output=True,
+            text=True
+        )
+        
+        for line in result.stdout.split('\n'):
+            if 'BD Address' in line or 'Address' in line:
+                parts = line.split()
+                for part in parts:
+                    if ':' in part and len(part) == 17:
+                        return part
+                        
+        print("❌ MAC address not found in hciconfig")
+        return "Unknown"
+        
+    except Exception as e:
+        print(f"❌ Error getting MAC: {e}")
+        return "Unknown"
+
+class GATTApplication(dbus.service.Object):
+    """Простое GATT приложение"""
     
-    def __init__(self, bus, path):
-        super().__init__(bus, path)
+    def __init__(self, bus):
         self.bus = bus
-        self.path = path
-        
-        # Состояние уведомлений
+        self.path = "/com/example/gatt"
         self.notify_enabled = False
-        self.last_value = dbus.Array([], signature='y')
+        self.last_value = []
         
-        # Создаем службу
-        self.service_path = f"{path}/service0"
-        self.service = dbus.service.Object(bus, self.service_path)
+        # Регистрируем объект в D-Bus
+        dbus.service.Object.__init__(self, bus, self.path)
         
-        # Создаем характеристики
-        self.write_char_path = f"{self.service_path}/char0"
-        self.notify_char_path = f"{self.service_path}/char1"
-        
-        # Регистрируем методы характеристик
-        self.write_char = WriteCharacteristic(bus, self.write_char_path, self)
-        self.notify_char = NotifyCharacteristic(bus, self.notify_char_path, self)
-        
-        # Выводим MAC адрес адаптера
-        self.print_mac_address()
-
-    def print_mac_address(self):
-        """Получить и вывести MAC адрес Bluetooth адаптера"""
-        try:
-            # Получаем системную шину
-            system_bus = dbus.SystemBus()
-            
-            # Получаем менеджер объектов BlueZ
-            manager = dbus.Interface(
-                system_bus.get_object("org.bluez", "/"),
-                "org.freedesktop.DBus.ObjectManager"
-            )
-            
-            # Ищем адаптеры
-            objects = manager.GetManagedObjects()
-            for path, interfaces in objects.items():
-                if "org.bluez.Adapter1" in interfaces:
-                    adapter = interfaces["org.bluez.Adapter1"]
-                    if "Address" in adapter:
-                        mac = adapter["Address"]
-                        print(f"📱 Bluetooth MAC Address: {mac}")
-                        return mac
-            
-            print("⚠️  Bluetooth adapter not found")
-            return None
-            
-        except Exception as e:
-            print(f"❌ Error getting MAC address: {e}")
-            return None
-
+        # Выводим MAC адрес
+        mac = get_mac_address()
+        print(f"📱 Bluetooth MAC: {mac}")
+    
     @dbus.service.method("org.freedesktop.DBus.ObjectManager",
                          out_signature="a{oa{sa{sv}}}")
     def GetManagedObjects(self):
-        """Возвращаем все объекты GATT"""
-        result = {
-            dbus.ObjectPath(self.service_path): {
+        """Возвращаем описание всех GATT объектов"""
+        return {
+            dbus.ObjectPath(f"{self.path}/service0"): {
                 "org.bluez.GattService1": {
                     "UUID": SERVICE_UUID,
                     "Primary": True,
                 }
             },
-            dbus.ObjectPath(self.write_char_path): {
+            dbus.ObjectPath(f"{self.path}/service0/char0"): {
                 "org.bluez.GattCharacteristic1": {
                     "UUID": WRITE_UUID,
-                    "Service": dbus.ObjectPath(self.service_path),
-                    "Flags": ["write", "write-without-response"],
+                    "Service": dbus.ObjectPath(f"{self.path}/service0"),
+                    "Flags": ["write"],
                 }
             },
-            dbus.ObjectPath(self.notify_char_path): {
+            dbus.ObjectPath(f"{self.path}/service0/char1"): {
                 "org.bluez.GattCharacteristic1": {
                     "UUID": NOTIFY_UUID,
-                    "Service": dbus.ObjectPath(self.service_path),
+                    "Service": dbus.ObjectPath(f"{self.path}/service0"),
                     "Flags": ["notify", "read"],
                 }
-            }
+            },
         }
-        return result
-
-    def send_notification(self, value):
-        """Отправить уведомление клиенту"""
-        if self.notify_enabled:
-            print(f"🔔 Sending notification: {bytes(value).hex()}")
-            self.notify_char.PropertiesChanged(
-                "org.bluez.GattCharacteristic1",
-                {"Value": value},
-                []
-            )
-
 
 class WriteCharacteristic(dbus.service.Object):
-    """Характеристика для записи данных"""
+    def __init__(self, bus, app):
+        self.bus = bus
+        self.app = app
+        self.path = f"{app.path}/service0/char0"
+        dbus.service.Object.__init__(self, bus, self.path)
     
-    def __init__(self, bus, path, gatt_service):
-        super().__init__(bus, path)
-        self.gatt_service = gatt_service
-
     @dbus.service.method("org.bluez.GattCharacteristic1",
                          in_signature="aya{sv}",
                          out_signature="")
     def WriteValue(self, value, options):
-        """Обработчик записи"""
         data = bytes(value)
-        print(f"✏️  Write received: {data.hex()} ({len(data)} bytes)")
+        print(f"✏️  Received data: {data.hex()}")
         
-        # Отправляем уведомление с теми же данными
-        self.gatt_service.send_notification(value)
-
-    @dbus.service.method("org.bluez.GattCharacteristic1",
-                         in_signature="a{sv}",
-                         out_signature="ay")
-    def ReadValue(self, options):
-        """Обработчик чтения (возвращаем тестовые данные)"""
-        return dbus.Array([0x4F, 0x4B], signature='y')  # "OK" в hex
-
+        # Сохраняем значение
+        self.app.last_value = list(value)
+        
+        # Если уведомления включены - отправляем
+        if self.app.notify_enabled:
+            self.send_notification(value)
+    
+    def send_notification(self, value):
+        """Отправить уведомление"""
+        try:
+            # Получаем объект notify характеристики
+            notify_path = f"{self.app.path}/service0/char1"
+            obj = self.bus.get_object(None, notify_path)
+            
+            # Создаем интерфейс Properties
+            props = dbus.Interface(obj, "org.freedesktop.DBus.Properties")
+            
+            # Отправляем изменение свойства Value
+            props.Set("org.bluez.GattCharacteristic1", 
+                     "Value", 
+                     dbus.Array(value, signature='y'))
+            
+            print(f"🔔 Notification sent: {bytes(value).hex()}")
+            
+        except Exception as e:
+            print(f"❌ Failed to send notification: {e}")
 
 class NotifyCharacteristic(dbus.service.Object):
-    """Характеристика для уведомлений"""
+    def __init__(self, bus, app):
+        self.bus = bus
+        self.app = app
+        self.path = f"{app.path}/service0/char1"
+        dbus.service.Object.__init__(self, bus, self.path)
     
-    def __init__(self, bus, path, gatt_service):
-        super().__init__(bus, path)
-        self.gatt_service = gatt_service
-
-    @dbus.service.signal("org.freedesktop.DBus.Properties",
-                         signature='sa{sv}as')
-    def PropertiesChanged(self, interface, changed, invalidated):
-        """Сигнал об изменении свойств (для уведомлений)"""
-        pass
-
     @dbus.service.method("org.bluez.GattCharacteristic1",
                          in_signature="",
                          out_signature="")
     def StartNotify(self):
-        """Включить уведомления"""
-        self.gatt_service.notify_enabled = True
         print("🔔 Notifications enabled")
-
+        self.app.notify_enabled = True
+    
     @dbus.service.method("org.bluez.GattCharacteristic1",
                          in_signature="",
                          out_signature="")
     def StopNotify(self):
-        """Выключить уведомления"""
-        self.gatt_service.notify_enabled = False
         print("🔕 Notifications disabled")
-
+        self.app.notify_enabled = False
+    
     @dbus.service.method("org.bluez.GattCharacteristic1",
                          in_signature="a{sv}",
                          out_signature="ay")
     def ReadValue(self, options):
-        """Обработчик чтения (возвращаем последнее значение)"""
-        return self.gatt_service.last_value
-
+        """Чтение значения"""
+        return dbus.Array(self.app.last_value, signature='y')
 
 def main():
-    """Главная функция"""
     print("🚀 Starting Simple GATT Server")
     print("=" * 40)
     
-    # Настраиваем D-Bus
+    # Инициализируем D-Bus главный цикл
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+    
+    # Подключаемся к системной шине
     bus = dbus.SystemBus()
     
-    # Создаем GATT службу
-    service = GATTService(bus, "/com/example/gatt")
+    # Создаем приложение и характеристики
+    app = GATTApplication(bus)
+    write_char = WriteCharacteristic(bus, app)
+    notify_char = NotifyCharacteristic(bus, app)
     
     try:
-        # Регистрируем приложение в BlueZ
+        # Получаем GATT менеджер BlueZ
         manager = dbus.Interface(
             bus.get_object("org.bluez", "/org/bluez/hci0"),
             "org.bluez.GattManager1"
         )
         
+        # Регистрируем приложение
         manager.RegisterApplication(
-            service.path,
+            app.path,
             {},
-            reply_handler=lambda: print("✅ GATT service registered successfully"),
-            error_handler=lambda e: print(f"❌ Registration failed: {e}")
+            reply_handler=lambda: print("✅ GATT service registered!"),
+            error_handler=lambda e: print(f"❌ Registration error: {e}")
         )
         
     except Exception as e:
-        print(f"❌ Cannot access Bluetooth adapter: {e}")
-        print("\nTroubleshooting tips:")
-        print("1. Make sure Bluetooth is enabled: sudo systemctl start bluetooth")
-        print("2. Check if adapter exists: hciconfig")
-        print("3. Try running with sudo: sudo python3 simple_gatt.py")
+        print(f"❌ Bluetooth error: {e}")
+        print("\n💡 Try running:")
+        print("   sudo systemctl start bluetooth")
+        print("   sudo python3 gatt_server.py")
         return
     
-    print("\n📋 Service Information:")
-    print(f"   Service UUID: {SERVICE_UUID}")
-    print(f"   Write UUID:   {WRITE_UUID}")
-    print(f"   Notify UUID:  {NOTIFY_UUID}")
-    print("\n⚡ Server is running. Press Ctrl+C to stop.")
+    print(f"\n📋 Service UUID: {SERVICE_UUID}")
+    print(f"📝 Write UUID:   {WRITE_UUID}")
+    print(f"🔔 Notify UUID:  {NOTIFY_UUID}")
+    print("\n⚡ Server ready! Press Ctrl+C to stop")
     print("=" * 40)
     
     # Запускаем главный цикл
@@ -214,9 +194,8 @@ def main():
         loop = GLib.MainLoop()
         loop.run()
     except KeyboardInterrupt:
-        print("\n👋 Stopping server...")
+        print("\n👋 Stopping...")
         loop.quit()
-
 
 if __name__ == "__main__":
     main()
