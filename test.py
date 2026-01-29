@@ -1,135 +1,68 @@
 #!/usr/bin/python3
-import dbus
-import dbus.service
-import dbus.mainloop.glib
-from gi.repository import GLib
 import subprocess
 import time
 
-# Настройки
-SERVICE_UUID = "12345678-1234-5678-1234-56789abcdef0"
-WRITE_UUID   = "12345678-1234-5678-1234-56789abcdef1"
-NOTIFY_UUID  = "12345678-1234-5678-1234-56789abcdef2"
-
-def setup_adapter():
-    """Настроить адаптер для обнаружения"""
-    commands = [
-        ['sudo', 'hciconfig', 'hci0', 'up'],
-        ['sudo', 'hciconfig', 'hci0', 'leadv'],
-        ['sudo', 'hciconfig', 'hci0', 'piscan'],
-        ['sudo', 'hciconfig', 'hci0', 'name', 'Python-GATT-Server'],
-    ]
-    
-    for cmd in commands:
-        try:
-            subprocess.run(cmd, check=False)
-            print(f"✓ {cmd[2:]} executed")
-        except:
-            pass
-    
-    # Даем время на применение настроек
-    time.sleep(1)
-
-def get_mac():
-    try:
-        result = subprocess.run(['hciconfig', 'hci0'], 
-                              capture_output=True, text=True)
-        for line in result.stdout.split('\n'):
-            if 'BD Address' in line:
-                parts = line.split()
-                for part in parts:
-                    if len(part) == 17 and ':' in part:
-                        return part
-        return "Unknown"
-    except:
-        return "Unknown"
-
-class SimpleGATT(dbus.service.Object):
-    def __init__(self):
-        # Настраиваем адаптер
-        setup_adapter()
-        
-        # Инициализируем D-Bus
-        dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
-        bus = dbus.SystemBus()
-        
-        # Путь для приложения
-        self.path = "/test/gatt"
-        dbus.service.Object.__init__(self, bus, self.path)
-        
-        # Состояние
-        self.notify = False
-        self.value = []
-        self.mac = get_mac()
-        
-        print(f"📱 MAC Address: {self.mac}")
-        
-        # Регистрируемся в BlueZ
-        try:
-            obj = bus.get_object("org.bluez", "/org/bluez/hci0")
-            manager = dbus.Interface(obj, "org.bluez.GattManager1")
-            manager.RegisterApplication(self.path, {})
-            print("✅ Registered with BlueZ")
-        except Exception as e:
-            print(f"❌ Registration failed: {e}")
-            return
-        
-        print(f"\n🔧 Service UUID: {SERVICE_UUID}")
-        print(f"✏️  Write UUID:  {WRITE_UUID}")
-        print(f"🔔 Notify UUID:  {NOTIFY_UUID}")
-        print("\n⚡ Server is running!")
-        print("   Use 'sudo hcitool lescan' to find the device")
-        print("   Device name: 'Python-GATT-Server'")
-        print("\nPress Ctrl+C to stop")
-    
-    @dbus.service.method("org.freedesktop.DBus.ObjectManager",
-                         out_signature="a{oa{sa{sv}}}")
-    def GetManagedObjects(self):
-        """Возвращаем структуру GATT сервиса"""
-        return {
-            dbus.ObjectPath(f"{self.path}/service0"): {
-                "org.bluez.GattService1": {
-                    "UUID": SERVICE_UUID,
-                    "Primary": True,
-                }
-            },
-            dbus.ObjectPath(f"{self.path}/service0/char0"): {
-                "org.bluez.GattCharacteristic1": {
-                    "UUID": WRITE_UUID,
-                    "Service": dbus.ObjectPath(f"{self.path}/service0"),
-                    "Flags": ["write"],
-                }
-            },
-            dbus.ObjectPath(f"{self.path}/service0/char1"): {
-                "org.bluez.GattCharacteristic1": {
-                    "UUID": NOTIFY_UUID,
-                    "Service": dbus.ObjectPath(f"{self.path}/service0"),
-                    "Flags": ["notify", "read"],
-                }
-            },
-        }
-
-def main():
-    print("🚀 Starting Simple GATT Server")
+def setup_simple_ble_server():
+    """Простая настройка BLE сервера через командную строку"""
+    print("🚀 Setting up Simple BLE Advertisement")
     print("=" * 50)
     
-    # Проверяем права
-    import os
-    if os.geteuid() != 0:
-        print("⚠️  Please run with sudo:")
-        print("   sudo python3 simple_gatt.py")
-        exit(1)
+    # Останавливаем любые существующие рекламы
+    subprocess.run(['sudo', 'hciconfig', 'hci0', 'noleadv'], check=False)
+    time.sleep(1)
     
-    # Создаем сервер
-    server = SimpleGATT()
+    # Включаем адаптер
+    subprocess.run(['sudo', 'hciconfig', 'hci0', 'up'], check=False)
     
-    # Запускаем главный цикл
+    # Устанавливаем имя
+    subprocess.run(['sudo', 'hciconfig', 'hci0', 'name', 'BLE-Test-Server'], check=False)
+    
+    # Включаем discoverable режим
+    subprocess.run(['sudo', 'hciconfig', 'hci0', 'piscan'], check=False)
+    
+    # Получаем MAC
+    result = subprocess.run(['hciconfig', 'hci0'], capture_output=True, text=True)
+    for line in result.stdout.split('\n'):
+        if 'BD Address' in line:
+            for part in line.split():
+                if ':' in part and len(part) == 17:
+                    print(f"📱 MAC Address: {part}")
+    
+    print("\n📡 Starting BLE advertisement...")
+    print("   Device name: BLE-Test-Server")
+    
+    # Запускаем рекламу в фоне
+    cmd = [
+        'sudo', 'hcitool', '-i', 'hci0', 'cmd',
+        '0x08', '0x0008',  # OGF=0x08 (LE), OCF=0x0008 (LE Set Advertising Data)
+        '0x02',             # Length
+        '0x01',             # Flags length
+        '0x01',             # Flags type (LE Limited Discoverable Mode)
+        '0x02'              # Flags value
+    ]
+    
+    subprocess.run(cmd, check=False)
+    
+    # Включаем рекламу
+    cmd = [
+        'sudo', 'hcitool', '-i', 'hci0', 'cmd',
+        '0x08', '0x000A',  # OGF=0x08, OCF=0x000A (LE Set Advertise Enable)
+        '0x01'             # Enable
+    ]
+    
+    subprocess.run(cmd, check=False)
+    
+    print("✅ BLE advertisement started!")
+    print("\n⚡ Device should now be visible in scans")
+    print("   Run in another terminal: sudo hcitool lescan")
+    print("\nPress Ctrl+C to stop")
+    
     try:
-        loop = GLib.MainLoop()
-        loop.run()
+        while True:
+            time.sleep(1)
     except KeyboardInterrupt:
-        print("\n👋 Stopping server...")
-        loop.quit()
+        print("\n👋 Stopping advertisement...")
+        subprocess.run(['sudo', 'hciconfig', 'hci0', 'noleadv'], check=False)
 
 if __name__ == "__main__":
-    main()
+    setup_simple_ble_server()
