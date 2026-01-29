@@ -4,6 +4,8 @@ import dbus.exceptions
 import dbus.mainloop.glib
 import dbus.service
 from gi.repository import GLib
+import subprocess
+import time
 
 BLUEZ_SERVICE_NAME = "org.bluez"
 GATT_MANAGER_IFACE = "org.bluez.GattManager1"
@@ -200,8 +202,31 @@ class Descriptor(dbus.service.Object):
 # ============================================================
 # Helper Functions
 # ============================================================
-def get_adapter_mac_address(bus):
-    """Получить MAC-адрес первого доступного Bluetooth адаптера"""
+def check_bluetooth_status():
+    """Проверить статус Bluetooth служб"""
+    try:
+        # Проверяем, запущен ли bluetooth сервис
+        result = subprocess.run(['systemctl', 'is-active', 'bluetooth'], 
+                              capture_output=True, text=True)
+        if result.stdout.strip() != 'active':
+            print("Bluetooth service is not active. Trying to start...")
+            subprocess.run(['sudo', 'systemctl', 'start', 'bluetooth'], check=False)
+            time.sleep(2)
+        
+        # Проверяем состояние адаптера
+        result = subprocess.run(['hciconfig'], capture_output=True, text=True)
+        if 'hci0' not in result.stdout:
+            print("No Bluetooth adapter found (hci0)")
+            return False
+            
+        print("Bluetooth service is active")
+        return True
+    except Exception as e:
+        print(f"Error checking Bluetooth status: {e}")
+        return False
+
+def get_adapter_info(bus):
+    """Получить информацию о Bluetooth адаптере"""
     try:
         # Получаем менеджер объектов BlueZ
         obj_manager = dbus.Interface(
@@ -212,16 +237,66 @@ def get_adapter_mac_address(bus):
         # Получаем все объекты
         objects = obj_manager.GetManagedObjects()
         
-        # Ищем первый адаптер
+        print("Searching for Bluetooth adapters...")
+        adapters = []
+        
+        # Ищем все адаптеры
         for path, interfaces in objects.items():
             if ADAPTER_IFACE in interfaces:
                 adapter_props = interfaces[ADAPTER_IFACE]
-                if "Address" in adapter_props:
-                    return adapter_props["Address"]
+                adapter_info = {
+                    'path': str(path),
+                    'address': adapter_props.get('Address', 'Unknown'),
+                    'name': adapter_props.get('Name', 'Unknown'),
+                    'powered': adapter_props.get('Powered', False),
+                    'discoverable': adapter_props.get('Discoverable', False),
+                    'pairable': adapter_props.get('Pairable', False),
+                    'discovering': adapter_props.get('Discovering', False)
+                }
+                adapters.append(adapter_info)
         
+        if not adapters:
+            print("No Bluetooth adapters found via D-Bus")
+            return None
+        
+        # Используем первый адаптер
+        adapter = adapters[0]
+        print(f"\n=== Bluetooth Adapter Information ===")
+        print(f"Adapter: {adapter['name']}")
+        print(f"MAC Address: {adapter['address']}")
+        print(f"Powered: {'Yes' if adapter['powered'] else 'No'}")
+        print(f"Discoverable: {'Yes' if adapter['discoverable'] else 'No'}")
+        print(f"Pairable: {'Yes' if adapter['pairable'] else 'No'}")
+        print(f"Discovering: {'Yes' if adapter['discovering'] else 'No'}")
+        print(f"D-Bus Path: {adapter['path']}")
+        print("=====================================\n")
+        
+        # Включаем адаптер если он выключен
+        if not adapter['powered']:
+            print("Adapter is powered off. Trying to power on...")
+            try:
+                adapter_obj = bus.get_object(BLUEZ_SERVICE_NAME, adapter['path'])
+                adapter_iface = dbus.Interface(adapter_obj, DBUS_PROP_IFACE)
+                adapter_iface.Set(ADAPTER_IFACE, "Powered", dbus.Boolean(1))
+                print("Adapter powered on successfully")
+                time.sleep(1)
+            except Exception as e:
+                print(f"Failed to power on adapter: {e}")
+        
+        return adapter['address']
+        
+    except dbus.exceptions.DBusException as e:
+        if "org.freedesktop.DBus.Error.ServiceUnknown" in str(e):
+            print("BlueZ service is not running!")
+            print("Try running: sudo systemctl start bluetooth")
+        elif "org.freedesktop.DBus.Error.AccessDenied" in str(e):
+            print("Permission denied! Try running with sudo:")
+            print("sudo python3 gatt_server.py")
+        else:
+            print(f"D-Bus error: {e}")
         return None
     except Exception as e:
-        print(f"Error getting MAC address: {e}")
+        print(f"Unexpected error getting adapter info: {e}")
         return None
 
 
@@ -231,23 +306,72 @@ def get_adapter_mac_address(bus):
 def main():
     global MAIN_LOOP
 
-    dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
-    bus = dbus.SystemBus()
+    print("=== GATT Server Starting ===")
+    
+    # Проверяем статус Bluetooth
+    if not check_bluetooth_status():
+        print("\nTroubleshooting steps:")
+        print("1. Check if Bluetooth adapter is physically present: lsusb | grep -i bluetooth")
+        print("2. Check kernel module: lsmod | grep bt")
+        print("3. Start Bluetooth service: sudo systemctl start bluetooth")
+        print("4. Enable Bluetooth: sudo systemctl enable bluetooth")
+        print("5. Check adapter: sudo hciconfig hci0 up")
+        return
 
-    # Получаем и выводим MAC-адрес адаптера
-    mac_address = get_adapter_mac_address(bus)
-    if mac_address:
-        print(f"Bluetooth adapter MAC address: {mac_address}")
-    else:
-        print("Warning: Could not get MAC address")
+    dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+    
+    try:
+        bus = dbus.SystemBus()
+    except dbus.exceptions.DBusException as e:
+        print(f"Failed to connect to system D-Bus: {e}")
+        print("Make sure D-Bus is running: sudo systemctl start dbus")
+        return
+
+    # Получаем и выводим информацию об адаптере
+    mac_address = get_adapter_info(bus)
+    if not mac_address:
+        print("Cannot proceed without a Bluetooth adapter")
+        return
 
     # Get BlueZ objects
     try:
-        manager = dbus.Interface(bus.get_object(BLUEZ_SERVICE_NAME, "/org/bluez/hci0"),
-                                 GATT_MANAGER_IFACE)
+        # Пробуем разные пути к адаптеру
+        adapter_paths = ["/org/bluez/hci0", "/org/bluez/hci"]
+        manager = None
+        
+        for path in adapter_paths:
+            try:
+                obj = bus.get_object(BLUEZ_SERVICE_NAME, path)
+                manager = dbus.Interface(obj, GATT_MANAGER_IFACE)
+                print(f"Using adapter at path: {path}")
+                break
+            except dbus.exceptions.DBusException:
+                continue
+        
+        if manager is None:
+            # Пробуем найти адаптер через ObjectManager
+            obj_manager = dbus.Interface(
+                bus.get_object(BLUEZ_SERVICE_NAME, "/"),
+                DBUS_OM_IFACE
+            )
+            objects = obj_manager.GetManagedObjects()
+            
+            for path, interfaces in objects.items():
+                if GATT_MANAGER_IFACE in interfaces:
+                    obj = bus.get_object(BLUEZ_SERVICE_NAME, path)
+                    manager = dbus.Interface(obj, GATT_MANAGER_IFACE)
+                    print(f"Found GATT manager at: {path}")
+                    break
+        
+        if manager is None:
+            print("No GATT manager interface found!")
+            print("Make sure your Bluetooth adapter supports Bluetooth LE (Low Energy)")
+            return
+            
     except dbus.exceptions.DBusException as e:
         print(f"Error accessing Bluetooth adapter: {e}")
-        print("Make sure Bluetooth is enabled and you have proper permissions")
+        print("Make sure you have proper permissions (try running with sudo)")
+        print(f"Error details: {e.get_dbus_message()}")
         return
 
     app = Application(bus)
@@ -272,15 +396,20 @@ def main():
     # Свяжем write-характеристику с notify-характеристикой — чтобы WriteValue мог отправлять уведомления
     write_char.notify_target = notify_char
 
+    print("\n=== GATT Service Information ===")
+    print(f"Service UUID: {SERVICE_UUID}")
+    print(f"Write characteristic UUID: {WRITE_UUID}")
+    print(f"Notify characteristic UUID: {NOTIFY_UUID}")
+    print(f"CCCD UUID: 00002902-0000-1000-8000-00805f9b34fb")
+    print("=================================\n")
+
     print("Registering GATT application…")
     manager.RegisterApplication(app.get_path(), {},
                                 reply_handler=lambda: print("✓ GATT application registered successfully"),
                                 error_handler=lambda e: print(f"✗ Failed to register application: {e}"))
 
-    print("\nService UUID:", SERVICE_UUID)
-    print("Write characteristic UUID:", WRITE_UUID)
-    print("Notify characteristic UUID:", NOTIFY_UUID)
     print("\nServer is running. Press Ctrl+C to stop.")
+    print(f"You can connect to this device using MAC address: {mac_address}")
 
     try:
         MAIN_LOOP = GLib.MainLoop()
@@ -288,6 +417,8 @@ def main():
     except KeyboardInterrupt:
         print("\nShutting down...")
         MAIN_LOOP.quit()
+    except Exception as e:
+        print(f"Error in main loop: {e}")
 
 
 if __name__ == "__main__":
