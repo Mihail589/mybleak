@@ -1,271 +1,302 @@
-#!/usr/bin/python3
+#!/usr/bin/env python3
+"""
+Простой синхронный BLE GATT сервер с использованием dbus-python
+Требует установки: sudo apt-get install python3-dbus bluez
+Запускать с правами суперпользователя: sudo python3 ble_server.py
+"""
+
 import dbus
-import dbus.service
 import dbus.mainloop.glib
+import dbus.service
 from gi.repository import GLib
-import subprocess
+import array
+import threading
 import time
-import os
 
-# Настройки
+# UUID для сервиса и характеристик
 SERVICE_UUID = "12345678-1234-5678-1234-56789abcdef0"
-WRITE_UUID   = "12345678-1234-5678-1234-56789abcdef1"
-NOTIFY_UUID  = "12345678-1234-5678-1234-56789abcdef2"
-DEVICE_NAME = "Python-BLE-Server"
+WRITE_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef1"
+NOTIFY_CHAR_UUID = "12345678-1234-5678-1234-56789abcdef2"
 
-def check_and_start_bluetooth():
-    """Проверить и запустить Bluetooth сервис"""
-    print("🔍 Checking Bluetooth service...")
-    
-    # Проверяем статус BlueZ
-    try:
-        result = subprocess.run(['systemctl', 'is-active', 'bluetooth'], 
-                              capture_output=True, text=True)
-        if result.stdout.strip() != 'active':
-            print("⚠️  Bluetooth service is not active, starting...")
-            subprocess.run(['sudo', 'systemctl', 'start', 'bluetooth'], check=False)
-            time.sleep(2)
-    except:
-        pass
-    
-    # Проверяем наличие адаптера
-    try:
-        result = subprocess.run(['hciconfig'], capture_output=True, text=True)
-        if 'hci0' not in result.stdout:
-            print("❌ No Bluetooth adapter found (hci0)")
-            print("   Check: lsusb | grep -i bluetooth")
-            return False
-        
-        # Включаем адаптер
-        subprocess.run(['sudo', 'hciconfig', 'hci0', 'up'], check=False)
-        time.sleep(1)
-        
-        # Проверяем поддержку LE
-        result = subprocess.run(['sudo', 'hcitool', 'lescan'], 
-                              capture_output=True, text=True, timeout=2)
-        if 'Set scan parameters failed' in result.stderr:
-            print("⚠️  Adapter may not support Bluetooth LE")
-            return False
-            
-        return True
-        
-    except subprocess.TimeoutExpired:
-        # Это нормально для hcitool lescan
-        return True
-    except Exception as e:
-        print(f"❌ Error checking adapter: {e}")
-        return False
+# UUID для BLE сервисов и характеристик
+GATT_MANAGER_IFACE = 'org.bluez.GattManager1'
+LE_ADVERTISING_MANAGER_IFACE = 'org.bluez.LEAdvertisingManager1'
+ADAPTER_IFACE = 'org.bluez.Adapter1'
+DBUS_OM_IFACE = 'org.freedesktop.DBus.ObjectManager'
+DBUS_PROP_IFACE = 'org.freedesktop.DBus.Properties'
 
-def get_mac_address():
-    """Получить MAC адрес адаптера"""
-    try:
-        result = subprocess.run(['hciconfig', 'hci0'], 
-                              capture_output=True, text=True)
-        for line in result.stdout.split('\n'):
-            if 'BD Address' in line or 'Address' in line:
-                for part in line.split():
-                    if ':' in part and len(part) == 17:
-                        return part
-        return "Unknown"
-    except:
-        return "Unknown"
+GATT_SERVICE_IFACE = 'org.bluez.GattService1'
+GATT_CHARACTERISTIC_IFACE = 'org.bluez.GattCharacteristic1'
+GATT_DESCRIPTOR_IFACE = 'org.bluez.GattDescriptor1'
 
-def make_advertised():
-    """Сделать устройство discoverable"""
-    commands = [
-        ['sudo', 'hciconfig', 'hci0', 'up'],
-        ['sudo', 'hciconfig', 'hci0', 'name', DEVICE_NAME],
-        ['sudo', 'hciconfig', 'hci0', 'piscan'],
-        ['sudo', 'bluetoothctl', 'discoverable', 'on'],
-        ['sudo', 'bluetoothctl', 'pairable', 'on'],
-    ]
-    
-    for cmd in commands:
-        try:
-            subprocess.run(cmd, check=False)
-            print(f"✓ {cmd[-1]} executed")
-            time.sleep(0.5)
-        except:
-            pass
+LE_ADVERTISEMENT_IFACE = 'org.bluez.LEAdvertisement1'
 
-class SimpleGATTApplication(dbus.service.Object):
-    """Простое GATT приложение"""
-    
-    def __init__(self):
-        # Проверяем и настраиваем Bluetooth
-        if not check_and_start_bluetooth():
-            print("❌ Cannot proceed without Bluetooth")
-            return
-        
-        # Делаем устройство видимым
-        make_advertised()
-        
-        # Получаем MAC
-        mac = get_mac_address()
-        print(f"📱 MAC Address: {mac}")
-        
-        # Инициализируем D-Bus
-        dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
-        self.bus = dbus.SystemBus()
-        
-        # Путь для приложения
-        self.path = "/org/bluez/gatt_app"
-        dbus.service.Object.__init__(self, self.bus, self.path)
-        
-        # Состояние
-        self.notify_enabled = False
-        self.last_value = []
-        
-        # Пытаемся зарегистрироваться в BlueZ
-        self.register_with_bluez()
-    
-    def register_with_bluez(self):
-        """Зарегистрировать приложение в BlueZ"""
-        try:
-            # Пробуем найти GATT менеджер
-            print("🔧 Looking for GATT manager...")
-            
-            # Сначала проверяем доступность BlueZ
-            try:
-                obj = self.bus.get_object("org.bluez", "/")
-                print("✓ BlueZ D-Bus service is available")
-            except:
-                print("❌ BlueZ D-Bus service not found")
-                print("   Try: sudo systemctl restart bluetooth")
-                return
-            
-            # Пробуем разные пути к адаптеру
-            adapter_paths = [
-                "/org/bluez/hci0",
-                "/org/bluez/hci",
-            ]
-            
-            manager = None
-            for path in adapter_paths:
-                try:
-                    obj = self.bus.get_object("org.bluez", path)
-                    manager = dbus.Interface(obj, "org.bluez.GattManager1")
-                    print(f"✓ Found GATT manager at: {path}")
-                    break
-                except dbus.exceptions.DBusException:
-                    continue
-            
-            if manager is None:
-                print("❌ No GATT manager found")
-                print("   Your adapter may not support BLE/GATT")
-                return
-            
-            # Регистрируем приложение
-            print("📝 Registering GATT application...")
-            manager.RegisterApplication(
-                self.path,
-                {},
-                reply_handler=lambda: print("✅ GATT application registered successfully!"),
-                error_handler=self.registration_error
+class Advertisement(dbus.service.Object):
+    def __init__(self, bus, index, adapter_path):
+        self.path = '/com/example/ble/advertisement' + str(index)
+        self.ad_type = 'peripheral'
+        self.local_name = 'Simple BLE Server'
+        self.service_uuids = [SERVICE_UUID]
+        self.solicit_uuids = None
+        self.manufacturer_data = None
+        self.service_data = None
+        self.include_tx_power = False
+        dbus.service.Object.__init__(self, bus, self.path)
+        self.adapter_path = adapter_path
+
+    def get_properties(self):
+        properties = dict()
+        properties['Type'] = self.ad_type
+        properties['LocalName'] = dbus.String(self.local_name)
+        if self.service_uuids is not None:
+            properties['ServiceUUIDs'] = dbus.Array(self.service_uuids, signature='s')
+        return properties
+
+    def get_path(self):
+        return dbus.ObjectPath(self.path)
+
+    @dbus.service.method(DBUS_PROP_IFACE, in_signature='s', out_signature='a{sv}')
+    def GetAll(self, interface):
+        if interface == LE_ADVERTISEMENT_IFACE:
+            return self.get_properties()
+        else:
+            raise dbus.exceptions.DBusException(
+                'org.freedesktop.DBus.Error.InvalidArgs',
+                'Invalid interface'
             )
-            
-        except Exception as e:
-            print(f"❌ Registration failed: {e}")
-            print("\n💡 Troubleshooting:")
-            print("1. Check BlueZ version: bluetoothctl --version")
-            print("2. Restart BlueZ: sudo systemctl restart bluetooth")
-            print("3. Check BLE support: sudo hcitool lescan")
-            print("4. Try older BlueZ compatibility mode")
-    
-    def registration_error(self, error):
-        """Обработчик ошибки регистрации"""
-        print(f"❌ Registration error: {error}")
-        
-        # Альтернативный метод: используем старый API
-        print("\n🔄 Trying alternative registration method...")
-        try:
-            # Используем ObjectManager для регистрации
-            om = dbus.Interface(
-                self.bus.get_object("org.bluez", "/"),
-                "org.freedesktop.DBus.ObjectManager"
-            )
-            
-            # Просто объявляем о себе
-            print("✓ Registered via ObjectManager (basic mode)")
-            print("⚠️  Note: Limited functionality in this mode")
-            
-        except Exception as e:
-            print(f"❌ Alternative method also failed: {e}")
-    
-    @dbus.service.method("org.freedesktop.DBus.ObjectManager",
-                         out_signature="a{oa{sa{sv}}}")
-    def GetManagedObjects(self):
-        """Возвращаем описание GATT сервисов"""
+
+    @dbus.service.method(LE_ADVERTISEMENT_IFACE, in_signature='', out_signature='')
+    def Release(self):
+        print('Advertisement released')
+
+class Characteristic(dbus.service.Object):
+    def __init__(self, bus, index, uuid, flags, service):
+        self.path = service.path + '/char' + str(index)
+        self.bus = bus
+        self.uuid = uuid
+        self.service = service
+        self.flags = flags
+        self.value = []
+        self.notifying = False
+        dbus.service.Object.__init__(self, bus, self.path)
+
+    def get_properties(self):
         return {
-            dbus.ObjectPath(f"{self.path}/service0"): {
-                "org.bluez.GattService1": {
-                    "UUID": SERVICE_UUID,
-                    "Primary": True,
-                }
-            },
-            dbus.ObjectPath(f"{self.path}/service0/char0"): {
-                "org.bluez.GattCharacteristic1": {
-                    "UUID": WRITE_UUID,
-                    "Service": dbus.ObjectPath(f"{self.path}/service0"),
-                    "Flags": ["write"],
-                }
-            },
-            dbus.ObjectPath(f"{self.path}/service0/char1"): {
-                "org.bluez.GattCharacteristic1": {
-                    "UUID": NOTIFY_UUID,
-                    "Service": dbus.ObjectPath(f"{self.path}/service0"),
-                    "Flags": ["notify", "read"],
-                }
-            },
+            GATT_CHARACTERISTIC_IFACE: {
+                'Service': self.service.get_path(),
+                'UUID': self.uuid,
+                'Flags': self.flags,
+                'Value': self.value,
+            }
         }
 
-def main():
-    print("=" * 60)
-    print("🚀 Python BLE GATT Server")
-    print("=" * 60)
-    
-    # Проверяем права
-    if os.geteuid() != 0:
-        print("⚠️  This script requires root privileges")
-        print("   Please run with: sudo python3 ble_server.py")
-        print("=" * 60)
-        return
-    
-    # Выводим информацию о системе
-    print("📋 System info:")
-    try:
-        # Версия BlueZ
-        result = subprocess.run(['bluetoothctl', '--version'], 
-                              capture_output=True, text=True)
-        print(f"   BlueZ version: {result.stdout.strip()}")
-    except:
+    def get_path(self):
+        return dbus.ObjectPath(self.path)
+
+    @dbus.service.method(DBUS_PROP_IFACE, in_signature='s', out_signature='a{sv}')
+    def GetAll(self, interface):
+        if interface == GATT_CHARACTERISTIC_IFACE:
+            return self.get_properties()[GATT_CHARACTERISTIC_IFACE]
+        else:
+            raise dbus.exceptions.DBusException(
+                'org.freedesktop.DBus.Error.InvalidArgs',
+                'Invalid interface'
+            )
+
+    @dbus.service.method(GATT_CHARACTERISTIC_IFACE, in_signature='a{sv}', out_signature='ay')
+    def ReadValue(self, options):
+        print(f'Read value on {self.uuid}: {self.value}')
+        return self.value
+
+    @dbus.service.method(GATT_CHARACTERISTIC_IFACE, in_signature='aya{sv}', out_signature='')
+    def WriteValue(self, value, options):
+        print(f'Write value on {self.uuid}: {value}')
+        self.value = value
+        
+        # Если это write характеристика, отправляем уведомление через notify характеристику
+        if self.uuid == WRITE_CHAR_UUID:
+            # Находим notify характеристику и отправляем уведомление
+            for char in self.service.characteristics:
+                if char.uuid == NOTIFY_CHAR_UUID:
+                    char.value = value
+                    char.PropertiesChanged(GATT_CHARACTERISTIC_IFACE, {'Value': value}, [])
+                    print(f'Notified with value: {value}')
+                    break
+
+    @dbus.service.method(GATT_CHARACTERISTIC_IFACE, in_signature='', out_signature='')
+    def StartNotify(self):
+        if self.notifying:
+            return
+        self.notifying = True
+        print(f'Start notify on {self.uuid}')
+
+    @dbus.service.method(GATT_CHARACTERISTIC_IFACE, in_signature='', out_signature='')
+    def StopNotify(self):
+        if not self.notifying:
+            return
+        self.notifying = False
+        print(f'Stop notify on {self.uuid}')
+
+    @dbus.service.signal(DBUS_PROP_IFACE, signature='sa{sv}as')
+    def PropertiesChanged(self, interface, changed, invalidated):
         pass
-    
-    # Создаем приложение
-    print("\n⚙️  Initializing...")
-    app = SimpleGATTApplication()
-    
-    if not hasattr(app, 'bus'):
-        print("❌ Failed to initialize application")
+
+class Service(dbus.service.Object):
+    def __init__(self, bus, index, uuid, primary):
+        self.path = '/com/example/ble/service' + str(index)
+        self.bus = bus
+        self.uuid = uuid
+        self.primary = primary
+        self.characteristics = []
+        dbus.service.Object.__init__(self, bus, self.path)
+
+    def get_properties(self):
+        return {
+            GATT_SERVICE_IFACE: {
+                'UUID': self.uuid,
+                'Primary': self.primary,
+                'Characteristics': dbus.Array(
+                    [c.get_path() for c in self.characteristics],
+                    signature='o'
+                )
+            }
+        }
+
+    def get_path(self):
+        return dbus.ObjectPath(self.path)
+
+    @dbus.service.method(DBUS_PROP_IFACE, in_signature='s', out_signature='a{sv}')
+    def GetAll(self, interface):
+        if interface == GATT_SERVICE_IFACE:
+            return self.get_properties()[GATT_SERVICE_IFACE]
+        else:
+            raise dbus.exceptions.DBusException(
+                'org.freedesktop.DBus.Error.InvalidArgs',
+                'Invalid interface'
+            )
+
+    def add_characteristic(self, characteristic):
+        self.characteristics.append(characteristic)
+
+class Application(dbus.service.Object):
+    def __init__(self, bus):
+        self.path = '/com/example/ble/app'
+        self.services = []
+        dbus.service.Object.__init__(self, bus, self.path)
+
+    def get_path(self):
+        return dbus.ObjectPath(self.path)
+
+    @dbus.service.method(DBUS_OM_IFACE, out_signature='a{oa{sa{sv}}}')
+    def GetManagedObjects(self):
+        response = {}
+        
+        for service in self.services:
+            response[service.get_path()] = service.get_properties()
+            for char in service.characteristics:
+                response[char.get_path()] = char.get_properties()
+        
+        return response
+
+    def add_service(self, service):
+        self.services.append(service)
+
+def register_advertisement(advertisement, adapter_path, bus):
+    adapter = dbus.Interface(bus.get_object('org.bluez', adapter_path), LE_ADVERTISING_MANAGER_IFACE)
+    adapter.RegisterAdvertisement(
+        advertisement.get_path(),
+        {},
+        reply_handler=lambda: print('Advertisement registered successfully'),
+        error_handler=lambda error: print(f'Failed to register advertisement: {error}')
+    )
+
+def register_application(application, adapter_path, bus):
+    adapter = dbus.Interface(bus.get_object('org.bluez', adapter_path), GATT_MANAGER_IFACE)
+    adapter.RegisterApplication(
+        application.get_path(),
+        {},
+        reply_handler=lambda: print('Application registered successfully'),
+        error_handler=lambda error: print(f'Failed to register application: {error}')
+    )
+
+def find_adapter(bus):
+    remote_om = dbus.Interface(bus.get_object('org.bluez', '/'), DBUS_OM_IFACE)
+    objects = remote_om.GetManagedObjects()
+
+    for o, props in objects.items():
+        if GATT_MANAGER_IFACE in props and LE_ADVERTISING_MANAGER_IFACE in props:
+            return o
+
+    return None
+
+def main():
+    # Инициализация DBus
+    dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+    bus = dbus.SystemBus()
+
+    # Находим адаптер Bluetooth
+    adapter_path = find_adapter(bus)
+    if not adapter_path:
+        print('LEAdvertisingManager1 interface not found')
         return
+
+    print(f'Using adapter: {adapter_path}')
+
+    # Создаем приложение
+    app = Application(bus)
+
+    # Создаем сервис
+    service = Service(bus, 0, SERVICE_UUID, True)
+
+    # Создаем характеристику для записи
+    write_char = Characteristic(
+        bus, 
+        0, 
+        WRITE_CHAR_UUID,
+        ['write', 'write-without-response'],
+        service
+    )
+    service.add_characteristic(write_char)
+
+    # Создаем характеристику для уведомлений
+    notify_char = Characteristic(
+        bus,
+        1,
+        NOTIFY_CHAR_UUID,
+        ['read', 'notify'],
+        service
+    )
+    service.add_characteristic(notify_char)
+
+    # Добавляем сервис в приложение
+    app.add_service(service)
+
+    # Создаем и регистрируем рекламу
+    advertisement = Advertisement(bus, 0, adapter_path)
     
-    print(f"\n📡 Device name: {DEVICE_NAME}")
-    print(f"🔧 Service UUID: {SERVICE_UUID}")
-    print(f"✏️  Write UUID:  {WRITE_UUID}")
-    print(f"🔔 Notify UUID:  {NOTIFY_UUID}")
-    print("\n⚡ Server is running!")
-    print("   To test: sudo hcitool lescan")
-    print("   Or use: bluetoothctl scan on")
-    print("=" * 60)
-    print("Press Ctrl+C to stop")
+    # Регистрируем приложение
+    register_application(app, adapter_path, bus)
     
-    # Запускаем главный цикл
+    # Регистрируем рекламу
+    register_advertisement(advertisement, adapter_path, bus)
+
+    print('=' * 50)
+    print('BLE GATT Server запущен')
+    print(f'Service UUID: {SERVICE_UUID}')
+    print(f'Write UUID: {WRITE_CHAR_UUID}')
+    print(f'Notify UUID: {NOTIFY_CHAR_UUID}')
+    print('=' * 50)
+    print('Ожидание подключения...')
+    print('Данные, записанные в Write характеристику, будут отправляться через Notify')
+    print('Для выхода нажмите Ctrl+C')
+    print('=' * 50)
+
     try:
+        # Запускаем GLib main loop
         loop = GLib.MainLoop()
         loop.run()
     except KeyboardInterrupt:
-        print("\n👋 Stopping server...")
-        loop.quit()
+        print('\nСервер остановлен')
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
