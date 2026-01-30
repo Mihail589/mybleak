@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Полностью рабочий BLE GATT сервер с рекламой
+Полностью рабочий BLE GATT сервер с правильной рекламой для LE-only
 """
 
 import dbus
@@ -10,6 +10,7 @@ from gi.repository import GLib
 import time
 import sys
 import os
+import subprocess
 
 # UUID для сервиса и характеристик
 SERVICE_UUID = "12345678-1234-5678-1234-56789abcdef0"
@@ -23,7 +24,7 @@ class Advertisement(dbus.service.Object):
         self.path = self.PATH_BASE + str(index)
         self.bus = bus
         self.index = index
-        self.local_name = "Simple BLE Server"
+        self.local_name = "BLE-Server"
         dbus.service.Object.__init__(self, bus, self.path)
         print(f"Advertisement created at {self.path}")
 
@@ -33,6 +34,8 @@ class Advertisement(dbus.service.Object):
             'LocalName': dbus.String(self.local_name),
             'ServiceUUIDs': dbus.Array([SERVICE_UUID], signature='s'),
             'Includes': dbus.Array(['tx-power'], signature='s'),
+            'Discoverable': dbus.Boolean(True),
+            'DiscoverableTimeout': dbus.UInt32(0),
         }
 
     def get_path(self):
@@ -197,6 +200,39 @@ class Application(dbus.service.Object):
     def add_service(self, service):
         self.services.append(service)
 
+def setup_bluetooth():
+    """Настроить Bluetooth перед запуском"""
+    print("Setting up Bluetooth...")
+    
+    commands = [
+        # Включаем Bluetooth
+        "sudo rfkill unblock bluetooth",
+        "sudo systemctl start bluetooth",
+        "sudo systemctl enable bluetooth",
+        # Включаем адаптер
+        "sudo hciconfig hci0 up",
+        # Включаем LE
+        "sudo hciconfig hci0 leadv",
+        # Отключаем классический Bluetooth
+        "sudo btmgmt --index hci0 bredr off",
+        # Включаем LE
+        "sudo btmgmt --index hci0 le on",
+        "sudo btmgmt --index hci0 connectable on",
+        "sudo btmgmt --index hci0 discov on",
+        # Применяем изменения
+        "sudo btmgmt --index hci0 power on",
+    ]
+    
+    for cmd in commands:
+        print(f"Running: {cmd}")
+        try:
+            subprocess.run(cmd, shell=True, check=True, capture_output=True, text=True)
+            time.sleep(0.5)
+        except subprocess.CalledProcessError as e:
+            print(f"Warning: {cmd} failed: {e.stderr}")
+    
+    print("Bluetooth setup complete")
+
 def find_adapter(bus):
     """Найти первый доступный адаптер Bluetooth"""
     try:
@@ -215,6 +251,15 @@ def find_adapter(bus):
                     print("Powering on adapter...")
                     adapter_props.Set('org.bluez.Adapter1', 'Powered', dbus.Boolean(True))
                     time.sleep(1)
+                
+                # Отключаем BR/EDR (классический Bluetooth)
+                try:
+                    print("Disabling BR/EDR (classic Bluetooth)...")
+                    adapter_props.Set('org.bluez.Adapter1', 'Discoverable', dbus.Boolean(False))
+                    adapter_props.Set('org.bluez.Adapter1', 'Pairable', dbus.Boolean(False))
+                except:
+                    print("Warning: Could not disable BR/EDR properties")
+                
                 return path
     except Exception as e:
         print(f"Error finding adapter: {e}")
@@ -267,7 +312,7 @@ def setup_gatt(bus, adapter_path, application):
 
 def main():
     print("=" * 60)
-    print("Simple BLE GATT Server")
+    print("BLE GATT Server (LE-Only)")
     print("=" * 60)
     
     # Проверка прав
@@ -275,6 +320,10 @@ def main():
         print("ERROR: Must run as root (use sudo)")
         print("Usage: sudo python3 ble_server.py")
         sys.exit(1)
+    
+    # Настраиваем Bluetooth
+    setup_bluetooth()
+    time.sleep(2)
     
     # Инициализация DBus
     dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
@@ -284,10 +333,6 @@ def main():
     adapter_path = find_adapter(bus)
     if not adapter_path:
         print("ERROR: No Bluetooth adapter found")
-        print("Make sure:")
-        print("1. Bluetooth hardware is connected")
-        print("2. Bluetooth service is running: sudo systemctl start bluetooth")
-        print("3. Adapter is not blocked by rfkill")
         sys.exit(1)
     
     print(f"Using adapter: {adapter_path}")
@@ -324,23 +369,26 @@ def main():
     
     # Настраиваем GATT сервер
     if not setup_gatt(bus, adapter_path, app):
-        print("WARNING: GATT server setup failed, but continuing...")
+        print("ERROR: GATT server setup failed")
+        sys.exit(1)
     
     time.sleep(1)
     
     # Настраиваем рекламу
     if not setup_advertising(bus, adapter_path, advertisement):
-        print("WARNING: Advertising setup failed")
+        print("ERROR: Advertising setup failed")
+        sys.exit(1)
     
     print("\n" + "=" * 60)
     print("SERVER IS RUNNING")
     print("=" * 60)
-    print(f"Device Name: Simple BLE Server")
+    print(f"Device Name: BLE-Server")
+    print(f"Device Address: (check with: hcitool dev)")
     print(f"Service UUID: {SERVICE_UUID}")
     print(f"Write Characteristic: {WRITE_CHAR_UUID}")
     print(f"Notify Characteristic: {NOTIFY_CHAR_UUID}")
     print("\nTo test with nRF Connect:")
-    print("1. Scan for 'Simple BLE Server'")
+    print("1. Scan for 'BLE-Server' (LE device only)")
     print("2. Connect to device")
     print("3. Find service with UUID above")
     print("4. Write to Write characteristic")
@@ -348,6 +396,9 @@ def main():
     print("6. Written data should appear in notifications")
     print("\nPress Ctrl+C to stop")
     print("=" * 60)
+    
+    # Показываем адрес устройства
+    subprocess.run("hcitool dev", shell=True)
     
     try:
         # Запускаем главный цикл
