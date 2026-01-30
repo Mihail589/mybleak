@@ -32,7 +32,7 @@ GATT_DESCRIPTOR_IFACE = 'org.bluez.GattDescriptor1'
 LE_ADVERTISEMENT_IFACE = 'org.bluez.LEAdvertisement1'
 
 class Advertisement(dbus.service.Object):
-    def __init__(self, bus, index, adapter_path):
+    def __init__(self, bus, index):
         self.path = '/com/example/ble/advertisement' + str(index)
         self.ad_type = 'peripheral'
         self.local_name = 'Simple BLE Server'
@@ -42,14 +42,13 @@ class Advertisement(dbus.service.Object):
         self.service_data = None
         self.include_tx_power = False
         dbus.service.Object.__init__(self, bus, self.path)
-        self.adapter_path = adapter_path
 
     def get_properties(self):
-        properties = dict()
-        properties['Type'] = self.ad_type
-        properties['LocalName'] = dbus.String(self.local_name)
-        if self.service_uuids is not None:
-            properties['ServiceUUIDs'] = dbus.Array(self.service_uuids, signature='s')
+        properties = {
+            'Type': self.ad_type,
+            'LocalName': dbus.String(self.local_name),
+            'ServiceUUIDs': dbus.Array(self.service_uuids, signature='s')
+        }
         return properties
 
     def get_path(self):
@@ -85,8 +84,8 @@ class Characteristic(dbus.service.Object):
             GATT_CHARACTERISTIC_IFACE: {
                 'Service': self.service.get_path(),
                 'UUID': self.uuid,
-                'Flags': self.flags,
-                'Value': self.value,
+                'Flags': dbus.Array(self.flags, signature='s'),
+                'Value': dbus.Array(self.value, signature='y'),
             }
         }
 
@@ -106,7 +105,7 @@ class Characteristic(dbus.service.Object):
     @dbus.service.method(GATT_CHARACTERISTIC_IFACE, in_signature='a{sv}', out_signature='ay')
     def ReadValue(self, options):
         print(f'Read value on {self.uuid}: {self.value}')
-        return self.value
+        return dbus.Array(self.value, signature='y')
 
     @dbus.service.method(GATT_CHARACTERISTIC_IFACE, in_signature='aya{sv}', out_signature='')
     def WriteValue(self, value, options):
@@ -119,7 +118,12 @@ class Characteristic(dbus.service.Object):
             for char in self.service.characteristics:
                 if char.uuid == NOTIFY_CHAR_UUID:
                     char.value = value
-                    char.PropertiesChanged(GATT_CHARACTERISTIC_IFACE, {'Value': value}, [])
+                    # Используем правильную сигнатуру для PropertiesChanged
+                    char.PropertiesChanged(
+                        GATT_CHARACTERISTIC_IFACE,
+                        {'Value': dbus.Array(value, signature='y')},
+                        []
+                    )
                     print(f'Notified with value: {value}')
                     break
 
@@ -189,45 +193,61 @@ class Application(dbus.service.Object):
 
     @dbus.service.method(DBUS_OM_IFACE, out_signature='a{oa{sa{sv}}}')
     def GetManagedObjects(self):
-        response = {}
+        response = dbus.Dictionary({}, signature='oa{sa{sv}}')
+        
+        print('GetManagedObjects called')
         
         for service in self.services:
             response[service.get_path()] = service.get_properties()
+            print(f'Added service: {service.path}')
+            
             for char in service.characteristics:
                 response[char.get_path()] = char.get_properties()
+                print(f'Added characteristic: {char.path}')
         
+        print(f'Total objects in response: {len(response)}')
         return response
 
     def add_service(self, service):
         self.services.append(service)
 
 def register_advertisement(advertisement, adapter_path, bus):
-    adapter = dbus.Interface(bus.get_object('org.bluez', adapter_path), LE_ADVERTISING_MANAGER_IFACE)
-    adapter.RegisterAdvertisement(
-        advertisement.get_path(),
-        {},
-        reply_handler=lambda: print('Advertisement registered successfully'),
-        error_handler=lambda error: print(f'Failed to register advertisement: {error}')
-    )
+    try:
+        adapter = dbus.Interface(bus.get_object('org.bluez', adapter_path), LE_ADVERTISING_MANAGER_IFACE)
+        adapter.RegisterAdvertisement(
+            advertisement.get_path(),
+            {},
+            reply_handler=lambda: print('Advertisement registered successfully'),
+            error_handler=lambda error: print(f'Failed to register advertisement: {error}')
+        )
+    except Exception as e:
+        print(f'Error registering advertisement: {e}')
 
 def register_application(application, adapter_path, bus):
-    adapter = dbus.Interface(bus.get_object('org.bluez', adapter_path), GATT_MANAGER_IFACE)
-    adapter.RegisterApplication(
-        application.get_path(),
-        {},
-        reply_handler=lambda: print('Application registered successfully'),
-        error_handler=lambda error: print(f'Failed to register application: {error}')
-    )
+    try:
+        adapter = dbus.Interface(bus.get_object('org.bluez', adapter_path), GATT_MANAGER_IFACE)
+        adapter.RegisterApplication(
+            application.get_path(),
+            {},
+            reply_handler=lambda: print('Application registered successfully'),
+            error_handler=lambda error: print(f'Failed to register application: {error}')
+        )
+    except Exception as e:
+        print(f'Error registering application: {e}')
 
 def find_adapter(bus):
-    remote_om = dbus.Interface(bus.get_object('org.bluez', '/'), DBUS_OM_IFACE)
-    objects = remote_om.GetManagedObjects()
+    try:
+        remote_om = dbus.Interface(bus.get_object('org.bluez', '/'), DBUS_OM_IFACE)
+        objects = remote_om.GetManagedObjects()
 
-    for o, props in objects.items():
-        if GATT_MANAGER_IFACE in props and LE_ADVERTISING_MANAGER_IFACE in props:
-            return o
+        for o, props in objects.items():
+            if GATT_MANAGER_IFACE in props and LE_ADVERTISING_MANAGER_IFACE in props:
+                return o
 
-    return None
+        return None
+    except Exception as e:
+        print(f'Error finding adapter: {e}')
+        return None
 
 def main():
     # Инициализация DBus
@@ -272,10 +292,16 @@ def main():
     app.add_service(service)
 
     # Создаем и регистрируем рекламу
-    advertisement = Advertisement(bus, 0, adapter_path)
+    advertisement = Advertisement(bus, 0)
+    
+    # Даем время для инициализации объектов
+    time.sleep(1)
     
     # Регистрируем приложение
     register_application(app, adapter_path, bus)
+    
+    # Даем время для регистрации приложения
+    time.sleep(1)
     
     # Регистрируем рекламу
     register_advertisement(advertisement, adapter_path, bus)
