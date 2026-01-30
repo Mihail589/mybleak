@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Полностью рабочий BLE GATT сервер с правильной рекламой для LE-only
+Рабочий BLE GATT сервер с правильной рекламой
 """
 
 import dbus
@@ -11,6 +11,7 @@ import time
 import sys
 import os
 import subprocess
+import uuid
 
 # UUID для сервиса и характеристик
 SERVICE_UUID = "12345678-1234-5678-1234-56789abcdef0"
@@ -25,26 +26,37 @@ class Advertisement(dbus.service.Object):
         self.bus = bus
         self.index = index
         self.local_name = "BLE-Server"
+        self.service_uuids = [SERVICE_UUID]
+        self.manufacturer_data = None
+        self.solicit_uuids = None
+        self.service_data = None
+        self.include_tx_power = True
+        self.discoverable = True
         dbus.service.Object.__init__(self, bus, self.path)
         print(f"Advertisement created at {self.path}")
 
     def get_properties(self):
-        return {
+        properties = {
             'Type': 'peripheral',
             'LocalName': dbus.String(self.local_name),
-            'ServiceUUIDs': dbus.Array([SERVICE_UUID], signature='s'),
-            'Includes': dbus.Array(['tx-power'], signature='s'),
-            'Discoverable': dbus.Boolean(True),
-            'DiscoverableTimeout': dbus.UInt32(0),
+            'ServiceUUIDs': dbus.Array(self.service_uuids, signature='s'),
         }
+        
+        if self.discoverable:
+            properties['Discoverable'] = dbus.Boolean(self.discoverable)
+            
+        if self.include_tx_power:
+            properties['Includes'] = dbus.Array(['tx-power'], signature='s')
+            
+        return properties
 
     def get_path(self):
         return dbus.ObjectPath(self.path)
 
     @dbus.service.method(dbus.PROPERTIES_IFACE, in_signature='s', out_signature='a{sv}')
     def GetAll(self, interface):
-        print(f"Advertisement GetAll for {interface}")
         if interface == 'org.bluez.LEAdvertisement1':
+            print(f"Advertisement GetAll called")
             return self.get_properties()
         raise dbus.exceptions.DBusException(
             'org.freedesktop.DBus.Error.InvalidArgs',
@@ -98,7 +110,6 @@ class Characteristic(dbus.service.Object):
         print(f"Write {self.uuid}: {value}")
         self.value = value
         
-        # Если это write характеристика, отправляем уведомление через notify
         if self.uuid == WRITE_CHAR_UUID:
             for char in self.service.characteristics:
                 if char.uuid == NOTIFY_CHAR_UUID:
@@ -205,36 +216,32 @@ def setup_bluetooth():
     print("Setting up Bluetooth...")
     
     commands = [
-        # Включаем Bluetooth
         "sudo rfkill unblock bluetooth",
         "sudo systemctl start bluetooth",
-        "sudo systemctl enable bluetooth",
-        # Включаем адаптер
+        "sleep 1",
         "sudo hciconfig hci0 up",
-        # Включаем LE
         "sudo hciconfig hci0 leadv",
-        # Отключаем классический Bluetooth
         "sudo btmgmt --index hci0 bredr off",
-        # Включаем LE
         "sudo btmgmt --index hci0 le on",
         "sudo btmgmt --index hci0 connectable on",
         "sudo btmgmt --index hci0 discov on",
-        # Применяем изменения
         "sudo btmgmt --index hci0 power on",
+        "sleep 2",
     ]
     
     for cmd in commands:
         print(f"Running: {cmd}")
         try:
-            subprocess.run(cmd, shell=True, check=True, capture_output=True, text=True)
-            time.sleep(0.5)
-        except subprocess.CalledProcessError as e:
-            print(f"Warning: {cmd} failed: {e.stderr}")
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            if result.returncode != 0:
+                print(f"Note: {cmd} returned {result.returncode}")
+        except Exception as e:
+            print(f"Warning: {cmd} - {e}")
     
     print("Bluetooth setup complete")
 
 def find_adapter(bus):
-    """Найти первый доступный адаптер Bluetooth"""
+    """Найти адаптер Bluetooth"""
     try:
         remote_om = dbus.Interface(bus.get_object('org.bluez', '/'), 
                                   'org.freedesktop.DBus.ObjectManager')
@@ -243,23 +250,19 @@ def find_adapter(bus):
         for path, interfaces in objects.items():
             if 'org.bluez.Adapter1' in interfaces:
                 print(f"Found adapter: {path}")
+                adapter = dbus.Interface(bus.get_object('org.bluez', path),
+                                        'org.freedesktop.DBus.Properties')
+                
                 # Включаем адаптер
-                adapter_props = dbus.Interface(bus.get_object('org.bluez', path),
-                                              'org.freedesktop.DBus.Properties')
-                current = adapter_props.Get('org.bluez.Adapter1', 'Powered')
-                if not current:
-                    print("Powering on adapter...")
-                    adapter_props.Set('org.bluez.Adapter1', 'Powered', dbus.Boolean(True))
-                    time.sleep(1)
-                
-                # Отключаем BR/EDR (классический Bluetooth)
                 try:
-                    print("Disabling BR/EDR (classic Bluetooth)...")
-                    adapter_props.Set('org.bluez.Adapter1', 'Discoverable', dbus.Boolean(False))
-                    adapter_props.Set('org.bluez.Adapter1', 'Pairable', dbus.Boolean(False))
+                    powered = adapter.Get('org.bluez.Adapter1', 'Powered')
+                    if not powered:
+                        print("Powering on adapter...")
+                        adapter.Set('org.bluez.Adapter1', 'Powered', dbus.Boolean(True))
+                        time.sleep(1)
                 except:
-                    print("Warning: Could not disable BR/EDR properties")
-                
+                    pass
+                    
                 return path
     except Exception as e:
         print(f"Error finding adapter: {e}")
@@ -267,25 +270,31 @@ def find_adapter(bus):
     return None
 
 def setup_advertising(bus, adapter_path, advertisement):
-    """Настроить и запустить рекламу"""
+    """Настроить рекламу"""
     try:
         print("Setting up advertising...")
         
-        # Получаем интерфейс для рекламы
-        adapter = dbus.Interface(bus.get_object('org.bluez', adapter_path),
-                                'org.bluez.LEAdvertisingManager1')
+        # Сначала получаем объект адаптера
+        adapter_obj = bus.get_object('org.bluez', adapter_path)
+        adapter = dbus.Interface(adapter_obj, 'org.bluez.LEAdvertisingManager1')
         
         # Регистрируем рекламу
+        print(f"Registering advertisement at {advertisement.path}")
         adapter.RegisterAdvertisement(
-            advertisement.get_path(),
+            advertisement.path,
             {},
             reply_handler=lambda: print("✓ Advertising started successfully"),
             error_handler=lambda e: print(f"✗ Error starting advertising: {e}")
         )
         
         return True
+    except dbus.exceptions.DBusException as e:
+        print(f"DBus error in setup_advertising: {e}")
+        return False
     except Exception as e:
-        print(f"Error setting up advertising: {e}")
+        print(f"Error in setup_advertising: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 def setup_gatt(bus, adapter_path, application):
@@ -293,13 +302,12 @@ def setup_gatt(bus, adapter_path, application):
     try:
         print("Setting up GATT server...")
         
-        # Получаем интерфейс GATT Manager
-        gatt_manager = dbus.Interface(bus.get_object('org.bluez', adapter_path),
-                                     'org.bluez.GattManager1')
+        adapter_obj = bus.get_object('org.bluez', adapter_path)
+        gatt_manager = dbus.Interface(adapter_obj, 'org.bluez.GattManager1')
         
-        # Регистрируем приложение
+        print(f"Registering application at {application.path}")
         gatt_manager.RegisterApplication(
-            application.get_path(),
+            application.path,
             {},
             reply_handler=lambda: print("✓ GATT server registered successfully"),
             error_handler=lambda e: print(f"✗ Error registering GATT: {e}")
@@ -307,12 +315,14 @@ def setup_gatt(bus, adapter_path, application):
         
         return True
     except Exception as e:
-        print(f"Error setting up GATT: {e}")
+        print(f"Error in setup_gatt: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 def main():
     print("=" * 60)
-    print("BLE GATT Server (LE-Only)")
+    print("BLE GATT Server")
     print("=" * 60)
     
     # Проверка прав
@@ -367,47 +377,72 @@ def main():
     # Ждем инициализации
     time.sleep(1)
     
+    print("\n" + "=" * 60)
+    print("Registering services...")
+    print("=" * 60)
+    
     # Настраиваем GATT сервер
     if not setup_gatt(bus, adapter_path, app):
-        print("ERROR: GATT server setup failed")
-        sys.exit(1)
+        print("WARNING: GATT server setup failed")
+    else:
+        print("✓ GATT server ready")
     
     time.sleep(1)
     
     # Настраиваем рекламу
     if not setup_advertising(bus, adapter_path, advertisement):
         print("ERROR: Advertising setup failed")
-        sys.exit(1)
+        
+        # Попробуем альтернативный метод
+        print("\nTrying alternative advertising method...")
+        try_manual_advertising()
+    else:
+        print("✓ Advertising started")
     
     print("\n" + "=" * 60)
-    print("SERVER IS RUNNING")
+    print("SERVER STATUS")
     print("=" * 60)
-    print(f"Device Name: BLE-Server")
-    print(f"Device Address: (check with: hcitool dev)")
+    print("Device should be advertising as: BLE-Server")
     print(f"Service UUID: {SERVICE_UUID}")
-    print(f"Write Characteristic: {WRITE_CHAR_UUID}")
-    print(f"Notify Characteristic: {NOTIFY_CHAR_UUID}")
-    print("\nTo test with nRF Connect:")
-    print("1. Scan for 'BLE-Server' (LE device only)")
-    print("2. Connect to device")
-    print("3. Find service with UUID above")
-    print("4. Write to Write characteristic")
-    print("5. Enable notifications on Notify characteristic")
-    print("6. Written data should appear in notifications")
-    print("\nPress Ctrl+C to stop")
+    print("\nCheck if device is visible:")
+    print("$ sudo hcitool lescan")
+    print("\nTest with nRF Connect or gatttool")
+    print("Press Ctrl+C to stop")
     print("=" * 60)
-    
-    # Показываем адрес устройства
-    subprocess.run("hcitool dev", shell=True)
     
     try:
-        # Запускаем главный цикл
         mainloop = GLib.MainLoop()
         mainloop.run()
     except KeyboardInterrupt:
         print("\nStopping server...")
     except Exception as e:
         print(f"Error: {e}")
+
+def try_manual_advertising():
+    """Попробовать ручной запуск рекламы через hcitool"""
+    print("\nAttempting manual advertising via hcitool...")
+    
+    commands = [
+        # Останавливаем любую существующую рекламу
+        "sudo hciconfig hci0 noleadv",
+        # Задаем параметры рекламы
+        "sudo hcitool -i hci0 cmd 0x08 0x0008 1E 02 01 1A 1A FF 4C 00 02 15 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+        # Включаем рекламу
+        "sudo hciconfig hci0 leadv",
+        # Показываем статус
+        "sudo hciconfig hci0",
+    ]
+    
+    for cmd in commands:
+        print(f"$ {cmd}")
+        try:
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            print(result.stdout)
+            if result.stderr:
+                print(f"stderr: {result.stderr}")
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"Error: {e}")
 
 if __name__ == "__main__":
     main()
